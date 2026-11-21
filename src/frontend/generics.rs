@@ -1465,10 +1465,32 @@ impl Lower<'_> {
         {
             self.check_clist_row_access(row, at)?;
         }
+        // As in the ordinary stable sort, a fallible key contributes its
+        // error to the result. Named/default forwarding wrappers must expose
+        // the same specialized result as the std method they forward to.
+        const SORT: &str = "__plenty_class_std.alloc.Allocator.sort_stable_by_key";
+        let sort_output = (name == SORT || self.generics.wrapped(name) == Some(SORT))
+            .then(|| {
+                let [_, Argument::Type(key)] = actual.as_slice() else {
+                    return None;
+                };
+                let sig = callables::signature(key)?;
+                let Some(Ty::Enum(sum)) = &sig.output else {
+                    return None;
+                };
+                if !sum.is_result() {
+                    return None;
+                }
+                crate::collection::key_sort_output(true, Some(&sum.get().variants[1].fields[0]))
+            })
+            .flatten();
         let (symbol, function) =
             self.generics
                 .instantiate(name, actual, at, self.aliases, self.access, self.symbol)?;
-        if let Some(new) = function {
+        if let Some(mut new) = function {
+            if let Some(output) = sort_output {
+                new.function.output = type_ref(&output, at);
+            }
             let symbol_id = self.sigs.intern(&new.function.name);
             if wrapper {
                 self.sigs.clist_slice_wrappers.insert(symbol_id);

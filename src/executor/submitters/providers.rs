@@ -136,6 +136,7 @@ impl Callbacks {
             }
             if let Op::Collection(op) = op {
                 let growth = match op {
+                    C::ListSortBy(sort) => sort.selected_workspace,
                     C::TryReserve(t)
                     | C::TryInsert(t)
                     | C::TryExtend(t)

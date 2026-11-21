@@ -603,6 +603,13 @@ fn step(
                                     |error| crate::sum::result(sort.key.clone(), error.clone()),
                                 )]
                     });
+                    if sort.selected_workspace
+                        && !(sort.stable && matches!(sort.list, Ty::View(_, true)))
+                    {
+                        return Err(
+                            "selected sort workspace requires stable exclusive view sorting".into(),
+                        );
+                    }
                     if !valid || !sort.key.is_orderable() {
                         return Err("key sort helper signature mismatch".into());
                     }

@@ -86,6 +86,10 @@ for invalid configuration rather than requiring a prevalidated integer domain.
 | `Allocator.empty_list[T](self) -> Result[list[T], AllocError]` | Borrows the allocator and creates an empty builtin list with zero row capacity. Object and bookkeeping storage still allocate. |
 | `Allocator.list_with_capacity[T](self, capacity: i64) -> Result[list[T], AllocError]` | Borrows the allocator and creates an empty builtin list with at least the requested element capacity. Zero is valid; negative or unrepresentable capacity returns `CapacityOverflow`. |
 
+### Select stable-sort workspace
+
+`workspace.sort_stable_by_key(&mut rows, key, descending=False)` sorts a list or exclusive slice view in place. Ordered input needs no allocation; otherwise the sort requests one temporary block from `workspace` before moving rows. Refusal leaves rows unchanged, with no fallback. The key may already have run. A key returning `Result[K, E]` adds `E` to the allocation error type and may fail after some rows have moved. The block is released before return. Neither the row owner nor allocations inside the key change policy.
+
 ### Copy a list slice with an output allocator
 
 `Allocator.slice[T](self, source: &list[T], start: i64 | Unset = Unset.Unset, stop: i64 | Unset = Unset.Unset, step: NonZero[i64] = 1) -> Result[list[T], AllocError]`

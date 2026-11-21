@@ -70,6 +70,18 @@ impl Lower<'_> {
         stable: bool,
         ops: &mut Vec<Op>,
     ) -> Result<Type> {
+        self.key_sort_with_workspace(base, args, at, stable, None, ops)
+    }
+
+    pub(super) fn key_sort_with_workspace(
+        &mut self,
+        base: &Expr,
+        args: &[Expr],
+        at: &Token,
+        stable: bool,
+        workspace: Option<&Expr>,
+        ops: &mut Vec<Op>,
+    ) -> Result<Type> {
         let method = if stable {
             "sort_stable_by_key"
         } else {
@@ -174,7 +186,9 @@ impl Lower<'_> {
         // The runtime sorts the rows and calls back into the generated
         // adapter, so elements move without per-access calls or refcounting.
         let receiver = if view.is_some() { "_view" } else { "" };
-        let sort_name = if stable {
+        let sort_name = if workspace.is_some() {
+            format!("{key_of}{receiver}_selected_stable_sort")
+        } else if stable {
             format!("{key_of}{receiver}_stable_sort")
         } else {
             format!("{key_of}{receiver}_sort")
@@ -192,11 +206,19 @@ impl Lower<'_> {
                 Ty::Ref(Arc::new(list.clone()), true)
             };
             let sig = Arc::new(crate::op::FnSig {
-                inputs: vec![
+                inputs: [
                     ("items".into(), items),
                     ("key".into(), callback.clone()),
                     ("descending".into(), Ty::Bool),
-                ],
+                ]
+                .into_iter()
+                .chain(workspace.map(|_| {
+                    (
+                        "workspace".into(),
+                        crate::collection::KeySort::workspace_handle(),
+                    )
+                }))
+                .collect(),
                 outputs: crate::collection::key_sort_output(stable, error.as_ref())
                     .into_iter()
                     .collect(),
@@ -209,14 +231,14 @@ impl Lower<'_> {
                 key,
                 error: error.clone(),
                 stable,
+                selected_workspace: workspace.is_some(),
             };
             self.sigs.insert(sort_name.clone(), sig.clone());
-            let mut body = vec![
-                Op::LoadLocal(0),
-                Op::LoadLocal(1),
-                Op::LoadLocal(2),
-                Op::Collection(CollectionOp::ListSortBy(Arc::new(sort))),
-            ];
+            let mut body = vec![Op::LoadLocal(0), Op::LoadLocal(1), Op::LoadLocal(2)];
+            if workspace.is_some() {
+                body.push(Op::LoadLocal(3));
+            }
+            body.push(Op::Collection(CollectionOp::ListSortBy(Arc::new(sort))));
             if !stable && error.is_none() {
                 body.push(Op::Drop);
             }
@@ -244,12 +266,9 @@ impl Lower<'_> {
                 kind: Expression::Unary("&mut".into(), Box::new(base.clone())),
             }
         };
-        self.call_named(
-            &sort_name,
-            &[receiver, args[0].clone(), descending],
-            at,
-            ops,
-        )
+        let mut operands = vec![receiver, args[0].clone(), descending];
+        operands.extend(workspace.cloned());
+        self.call_named(&sort_name, &operands, at, ops)
     }
 
     pub(super) fn list_sort_by_key(

@@ -3394,6 +3394,26 @@ pub(crate) unsafe extern "C" fn plenty_view_sort_stable_by(
     stable_result(rows.sort_stable_rows_by(key_order(compare, environment, descending)))
 }
 
+/// The selected variant checks context before inspecting the view or invoking a key.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn plenty_view_sort_stable_in(
+    rows: *mut u8,
+    len: u64,
+    compare: KeyOrder,
+    environment: *const u128,
+    descending: i64,
+    descriptor: *const Type,
+    handle: usize,
+) -> u64 {
+    // SAFETY: the compiler lends the allocator and exclusive rows for this call.
+    let allocator = unsafe { crate::allocator::bindings::borrow_handle(handle as u128) };
+    let mut rows = unsafe { Rows::view(rows, len as usize, &*descriptor) };
+    stable_result(rows.sort_stable_rows_in(
+        Some(&allocator),
+        key_order(compare, environment, descending),
+    ))
+}
+
 /// Returns the low 64 payload bits of an integer, float, or boolean list row.
 /// No pointer into the buffer escapes, including across later growing mutations.
 /// Generated code reads a borrowed list's rows inline (issue #509); this

@@ -264,7 +264,7 @@ unchanged and the call returns `AllocError`. Input already in key order is
 detected with `n - 1` comparisons and returns without allocating or moving.
 Otherwise a top-down merge sort uses insertion sort for runs of at most 16
 rows, skips merging two runs already in order, and takes O(n log n)
-comparisons, each computing two keys, plus O(log n) stack. The scratch block uses system storage even for a list made with a selected allocator; it is freed before the call returns. Moves into and out of scratch repair inline
+comparisons, each computing two keys, plus O(log n) stack. The ordinary method's scratch block uses system storage even for a list made with a selected allocator; it is freed before the call returns. Moves into and out of scratch repair inline
 addresses, and every element stays owned exactly once, even when a key is
 inconsistent; an inconsistent key yields an unspecified order.
 A key returning `Result[K, E]` makes the result `Result[(), AllocError | E]`,
@@ -275,6 +275,8 @@ On allocation failure the list is unchanged, but the ordered-input check may
 already have called the key. The two errors never occur together: the
 allocation is attempted only after that check finds an out-of-order pair, and
 after a key error every comparison reports equal, so the check cannot find one.
+
+To select just the merge workspace, use `workspace.sort_stable_by_key(&mut items, key, descending=False)` from [`std.alloc`](../../stdlib/alloc.md#select-stable-sort-workspace). The ordered-input check and callback error rules are unchanged.
 
 An exclusive [slice view](../../language/04-expressions/slices.md#operations-on-views),
 `&mut [T]`, has `sort`, `sort_by_key` and `sort_stable_by_key` with these

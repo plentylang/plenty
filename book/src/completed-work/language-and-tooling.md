@@ -11,6 +11,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 Issue #1014 extends the [submitting-worker wait rule](../design/facilities/03-concurrency/executors.md) to allocator callbacks and registered state destruction. The check matches coordination types rather than allocator instances; it does not ban all custom allocation on pool workers.
 
+### Selected stable-sort workspace
+
+`Allocator.sort_stable_by_key` sorts lists and exclusive views without changing row ownership. Disordered input reserves one selected scratch block; ordered input skips the provider.
+
 ### List ordering allocation audit
 
 The [allocation inventory](../design/toolchain/02-architecture/allocation-sites.md#list-ordering-result-versus-workspace) distinguishes the copied result of `sorted` from the workspace of in-place stable sorting and any allocations inside a key callback. No API changed.
