@@ -1,0 +1,51 @@
+# The original row loop from divide_digits, preserving its checked arithmetic.
+def offset_row(u: &mut [u64], v: &[u64], j: i64, guess: u64) -> u64:
+    unchecked:
+        mut borrow = 0u64
+        for i in range(len(v)):
+            product = guess * v[i] + borrow
+            low = product & 4294967295u64
+            borrow = (product >> 32u64) + (1u64 if u[j + i] < low else 0u64)
+            u[j + i] = u[j + i].wrapping_sub(low) & 4294967295u64
+        borrow
+
+# Change the addressing while retaining the original borrow arithmetic.
+def view_row(row: &mut [u64], v: &[u64], guess: u64) -> u64:
+    unchecked:
+        mut borrow = 0u64
+        for i in range(len(row)):
+            product = guess * v[i] + borrow
+            low = product & 4294967295u64
+            borrow = (product >> 32u64) + (1u64 if row[i] < low else 0u64)
+            row[i] = row[i].wrapping_sub(low) & 4294967295u64
+        borrow
+
+# The production subtract_digit_product loop.
+def complement_row(row: &mut [u64], v: &[u64], guess: u64) -> u64:
+    mut borrow = 0u64
+    for i in range(len(row)):
+        digit = row[i] ^ 4294967295u64
+        total = guess.wrapping_mul(v[i]).wrapping_add(borrow).wrapping_add(digit)
+        row[i] = (total ^ 4294967295u64) & 4294967295u64
+        borrow = total >> 32u64
+    borrow
+
+def main() -> Result[(), AllocError | IoError | ParseError]:
+    argv = args()?
+    mode = argv[1]
+    count = i64.parse(argv[2])?
+    mut row = [4294967295u64 - u64(i) for i in range(2050)]?
+    v = [4294967295u64 ^ (u64(i) * 15261831u64) & 4294967295u64 for i in range(2048)]?
+    mut borrow = 0u64
+    for _ in range(count):
+        if mode == "offset":
+            borrow = offset_row(&mut row, &v, 1, 4294967293u64)
+        elif mode == "view":
+            borrow = view_row(&mut row[1:2049], &v, 4294967293u64)
+        else:
+            borrow = complement_row(&mut row[1:2049], &v, 4294967293u64)
+    mut checksum = 0u64
+    for digit in &row:
+        checksum = checksum.wrapping_mul(31u64).wrapping_add(*digit)
+    print(borrow, checksum)?
+    Ok(())

@@ -89,6 +89,20 @@ to accept every nonnegative `i64`, including its final eight values. Boundary
 tests cover both optimization modes, overflow and malformed digits; the separate
 TAR content-length cap remains 2⁶² bytes.
 
+### Bigint long-division scratch (issue #987)
+
+Each trial quotient uses a bounded row of the numerator scratch. A
+multiply-add with a complemented digit produces both the difference digit and
+its borrow. Division packs the remainder from the same scratch and skips
+scaling by one. The signed floor and remainder rules still apply, including
+when Knuth’s quotient estimate requires adding back the divisor.
+
+At 65,536 bits, division used 61.5% fewer instructions and decimal rendering
+used 18.2% fewer on the Linux x86-64 reference host. The workloads and
+extracted row kernel are in `experiments/bigint-comparison/division/`.
+Large division remains quadratic when the quotient and divisor have
+similar digit counts. Issue #987 tracks the remaining performance gap.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

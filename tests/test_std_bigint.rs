@@ -175,6 +175,30 @@ fn large_products_and_division_cross_algorithm_boundaries() {
 }
 
 #[test]
+fn division_adds_back_when_the_low_digit_invalidates_the_estimate() {
+    let body = r#"    base = (from_i64(1) << 32)?
+    for text in ["800000000000000000000001", "10000000000000001"]?:
+        divisor = parse(text, 16)?
+        residue = (divisor - from_i64(1))?
+        numerator = ((divisor * base)? + residue)?
+        negative = (-numerator)?
+        negative_divisor = (-divisor)?
+        floor = ((-base)? - from_i64(1))?
+        (q, r) = numerator.checked_divmod(&divisor)?
+        (nq, nr) = negative.checked_divmod(&divisor)?
+        (dq, dr) = numerator.checked_divmod(&negative_divisor)?
+        (bq, br) = negative.checked_divmod(&negative_divisor)?
+        print(q == base, r == residue, nq == floor, nr == from_i64(1), dq == floor, dr == from_i64(-1), bq == base, br == (-residue)?)?
+"#;
+    // After subtracting the high quotient digit, the normalized divisor's
+    // top two digits match the remainder's. Only the subtract/add-back can
+    // distinguish that remainder from one more copy of the divisor.
+    let expected = "True True True True True True True True\n".repeat(2);
+    assert_eq!(run(body, false), expected);
+    assert_eq!(run(body, true), expected);
+}
+
+#[test]
 fn karatsuba_unequal_halves_and_carry_chains() {
     let mut body = String::new();
     let mut expected = String::new();
