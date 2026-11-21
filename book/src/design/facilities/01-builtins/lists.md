@@ -294,6 +294,7 @@ User-defined comparison functions and class ordering protocols are unsupported.
 
 `items.extend(other) -> Result[(), AllocError]` consumes a same-typed owned list
 on both outcomes. It reserves the entire additional count before transfer.
+Only the destination's allocator pays for growth. The source's allocator releases its old list storage; moving a row does not move its nested allocations to the destination's allocator.
 Success moves elements in order without cloning; failure preserves destination
 contents and drops the source. Sufficient capacity, including empty sources,
 needs no allocation. Source references, arbitrary iterables, and self-extension
@@ -319,6 +320,7 @@ Non-affine elements are retained into an independent list. Affine elements
 require an owned temporary receiver: selected owners transfer, and the remainder
 drops in source order. Failure drops the whole temporary; observed sources remain
 unchanged. `copy(items)?.slice(start, stop)` explicitly preserves an affine source.
+The method uses system storage for its new list, even if the source is selected. To choose the outer storage without copying affine rows, [reserve a selected list and consume the input](../../../tutorial/04-collections/allocation.md#move-rows-into-selected-storage). This is a transfer, unlike the borrowing `out.slice(&items, …)`.
 All output storage is reserved before transfer: two allocations for a nonempty
 slice, one for an empty owner.
 

@@ -188,6 +188,11 @@ and exercises the native opcode with a finite-set descriptor.
 view and a direct `keys()` projection, including a scoped worker, provider
 failure and growth after the source and allocator handle are dropped.
 
+## Consuming a list: destination growth versus new storage
+
+- `dst.extend(src)`: `Collection::try_extend` reserves the additional row count against **dst** before appending entries. Sufficient capacity means zero requests. Refusal consumes and drops the entire source but leaves the destination unchanged. The source releases its own list storage; transferred fields retain their backing. No merge scratch or independent result.
+- `temporary.slice(start, stop)`: the [owning slice inventory](#owning-slices-and-their-non-owning-lookalikes) describes its system-backed outer result. A caller can instead reserve a selected list for the clamped count and iterate the owned source, appending only matching indices. This moves affine rows directly; no staging list or deep copy. The loop owns the input even when reservation fails if the enclosing function takes it by value. It implements only the bounds the caller actually normalizes.
+
 ## List ordering: result versus workspace
 
 | Operation | Who pays |

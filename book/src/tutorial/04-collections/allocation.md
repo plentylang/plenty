@@ -260,6 +260,34 @@ so the saved scores stay the same when the caller updates the original. For a
 helper that just reads the scores, use the view directly and skip the copy.
 See [copy a slice view into a list](../../design/stdlib/alloc.md#copy-a-slice-view-into-a-list).
 
+## Move rows into selected storage
+
+Use `destination.extend(source)?` to transfer **all** rows. To keep only a
+range of an owned list, reserve the result and consume the source. Here the
+range is the first two rows. Neither loop iteration nor append copies an
+inner list; rows outside the range are dropped.
+
+```plenty
+import std.alloc as alloc
+import std.math as math
+
+def first_two(out: &alloc.Allocator, rows: list[list[i64]]) -> Result[list[list[i64]], AllocError]:
+    mut kept = out.list_with_capacity[list[i64]](math.min(2, len(rows)))?
+    for i, row in enumerate(rows):
+        if i < 2:
+            kept.append(row)?
+    Ok(kept)
+
+def main() -> Result[(), AllocError | IoError]:
+    out = alloc.system()
+    kept = first_two(&out, [[1]?, [2]?, [3]?]?)?
+    print(kept)?
+    Ok(())
+```
+```output
+[[1], [2]]
+```
+
 ## Select stable-sort workspace
 
 To keep equal-key rows in input order, lend the rows and select only the

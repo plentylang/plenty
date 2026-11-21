@@ -4,6 +4,73 @@ use rstest::rstest;
 use support::assert_visible_stdout as native;
 
 #[test]
+fn extend_uses_destination_policy_and_moves_rows_without_copying() {
+    super::test_std_alloc::assert_stdout(
+        &format!(
+            r#"{}
+class Row:
+    id: i64
+    def __del__(self) -> ():
+        print("drop", self.id).unwrap()
+
+def main() -> Result[(), AllocError | IoError]:
+    dst = budget("dst", 3, AllocError.CapacityOverflow)
+    src = budget("src", 3)
+    mut rows = dst.list_with_capacity[Row](4)?
+    mut first = src.list_with_capacity[Row](1)?
+    first.append(Row(7))?
+    rows.extend(first)?
+    drop(src)
+    rows.append(Row(8))?
+    rows.append(Row(9))?
+    rows.append(Row(10))?
+    more = [Row(0)]?
+    match rows.extend(more):
+        case Err(error):
+            print(error, rows[0].id, len(rows))?
+        case Ok(_):
+            print("unexpected growth")?
+    drop(rows)
+    Ok(())
+"#,
+            super::test_std_alloc_set_algebra::POLICY
+        ),
+        "src 0 3\nrefused dst\ndrop 0\nAllocError.CapacityOverflow 7 4\ndrop 7\ndrop 8\ndrop 9\ndrop 10\ndst 0 3\n",
+    );
+}
+
+#[test]
+fn selected_range_transfers_affine_rows_and_drops_source_on_refusal() {
+    super::test_std_alloc::assert_stdout(
+        &format!(
+            r#"{}
+class Row:
+    id: i64
+    def __del__(self) -> ():
+        print("drop", self.id).unwrap()
+
+def middle(out: &alloc.Allocator, source: list[Row]) -> Result[list[Row], AllocError]:
+    mut kept = out.list_with_capacity[Row](1)?
+    for i, row in enumerate(source):
+        if i == 1:
+            kept.append(row)?
+    Ok(kept)
+
+def main() -> Result[(), AllocError | IoError]:
+    out = budget("out", 3)
+    kept = middle(&out, [Row(1), Row(2), Row(3)]?)?
+    print(kept[0].id)?
+    drop(kept)
+    print(middle(&out, [Row(4), Row(5), Row(6)]?).is_err())?
+    Ok(())
+"#,
+            super::test_std_alloc_set_algebra::POLICY
+        ),
+        "drop 1\ndrop 3\n2\ndrop 2\nrefused out\ndrop 4\ndrop 5\ndrop 6\nTrue\nout 0 3\n",
+    );
+}
+
+#[test]
 fn extend_moves_elements_in_order_through_exclusive_references_and_fields() {
     native(
         r#"
