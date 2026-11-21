@@ -99,8 +99,10 @@ quotients fit `u64`. Karatsuba and Toom-3 borrow operand limb views and write
 their low and high products (the evaluations at 0 and infinity) directly into
 disjoint regions of the final output, avoiding two owned recursive product
 arrays. Evaluation and interpolation scratch remains fallibly allocated.
-Division holds views of its fixed scratch buffers while computing quotient
-digits. Parsing and rendering split digit ranges recursively, sharing binary
+Division subtracts each trial quotient product through a bounded scratch view
+and packs the remainder directly from that scratch. The normalization passes
+are skipped when the scale factor is one. Parsing and rendering split digit
+ranges recursively, sharing binary
 and exact radix powers within one conversion. Single-word rendering uses scalar
 division without a power cache. All their scratch allocations are fallible.
 Truncated vector transforms and specialized squaring are not implemented.

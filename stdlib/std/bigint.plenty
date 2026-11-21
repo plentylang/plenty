@@ -1019,7 +1019,7 @@ def digits32(value: &BigInt) -> Result[list[u64], AllocError]:
         trim(&mut out)
         Ok(out)
 
-def pack32(digits: &list[u64]) -> Result[list[u64], AllocError]:
+def pack32(digits: &[u64]) -> Result[list[u64], AllocError]:
     unchecked:
         mut out = list[u64].with_capacity((len(digits) + 1) // 2)?
         mut i = 0
@@ -1050,20 +1050,22 @@ def divide_magnitude(a: &BigInt, b: &BigInt) -> Result[(list[u64], list[u64]), A
         n = len(v)
         m = len(u) - n
         factor = 4294967296u64 // (v[-1] + 1u64)
-        scale32(&mut u, factor)?
-        scale32(&mut v, factor)?
+        if factor != 1u64:
+            scale32(&mut u, factor)?
+            scale32(&mut v, factor)?
         if len(u) == m + n:
             u.append(0u64)?
         mut q = zeros(m + 1)?
         divide_digits(&mut u, &v, &mut q)
-        mut r = u[:n]?
-        mut carry = 0u64
-        mut i = len(r)
-        while i > 0:
-            i -= 1
-            value = (carry << 32u64) | r[i]
-            r[i] = value // factor
-            carry = value % factor
+        r = &mut u[:n]
+        if factor != 1u64:
+            mut carry = 0u64
+            mut i = n
+            while i > 0:
+                i -= 1
+                value = (carry << 32u64) | r[i]
+                r[i] = value // factor
+                carry = value % factor
         Ok((pack32(&q)?, pack32(&r)?))
 
 # Hold scratch row addresses for the complete quotient loop. No list can grow
@@ -1087,12 +1089,7 @@ def divide_digits(u: &mut [u64], v: &[u64], q: &mut [u64]) -> ():
                     residual += v[n - 1]
                     if residual >= 4294967296u64:
                         break
-            mut borrow = 0u64
-            for i in range(n):
-                product = guess * v[i] + borrow
-                low = product & 4294967295u64
-                borrow = (product >> 32u64) + (1u64 if u[j + i] < low else 0u64)
-                u[j + i] = u[j + i].wrapping_sub(low) & 4294967295u64
+            borrow = subtract_digit_product(&mut u[j:j + n], v, guess)
             negative = u[j + n] < borrow
             u[j + n] = u[j + n].wrapping_sub(borrow) & 4294967295u64
             if negative:
@@ -1104,6 +1101,19 @@ def divide_digits(u: &mut [u64], v: &[u64], q: &mut [u64]) -> ():
                     carry = total >> 32u64
                 u[j + n] = (u[j + n] + carry) & 4294967295u64
             q[j] = guess
+
+# In base B = 2^32, complementing the current digit turns subtraction
+# into addition: guess*v[i] + borrow + (B-1-row[i]). Its low digit is
+# the complement of the result digit, and its high digit is the new borrow.
+# The sum is at most (B-1)^2 + 2*(B-1) = B^2-1, so these operations fit u64.
+def subtract_digit_product(row: &mut [u64], v: &[u64], guess: u64) -> u64:
+    mut borrow = 0u64
+    for i in range(len(row)):
+        digit = row[i] ^ 4294967295u64
+        total = guess.wrapping_mul(v[i]).wrapping_add(borrow).wrapping_add(digit)
+        row[i] = (total ^ 4294967295u64) & 4294967295u64
+        borrow = total >> 32u64
+    borrow
 
 def bitwise(a: &BigInt, b: &BigInt, operation: i64) -> Result[BigInt, AllocError]:
     match &a._value:
