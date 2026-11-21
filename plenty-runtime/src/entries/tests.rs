@@ -684,6 +684,64 @@ fn stable_sort_reports_allocation_failure_before_moving_rows() {
 }
 
 #[test]
+fn selected_stable_sort_requests_only_disordered_workspace() {
+    use crate::allocator::{Allocator, Block, Provider};
+    use std::alloc::Layout;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering::SeqCst},
+    };
+
+    struct Policy(Arc<[AtomicUsize; 2]>);
+    impl Provider for Policy {
+        fn allocate(&mut self, layout: Layout) -> Result<Block, memory::AllocError> {
+            if self.0[0].fetch_add(1, SeqCst) == 0 {
+                return Err(memory::AllocError::CapacityOverflow);
+            }
+            Allocator::system().allocate(layout)
+        }
+        fn release(&mut self, block: Block) {
+            self.0[1].fetch_add(1, SeqCst);
+            drop(block);
+        }
+    }
+    let counts = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+    let workspace = Allocator::new(&Allocator::system(), Policy(counts.clone()))
+        .unwrap_or_else(|_| panic!("bootstrap failed"));
+    let mut entries = filled(&NESTED, 64);
+    let compare = |a, b| {
+        number(Entry { key: a, value: 0 }, &NESTED)
+            .cmp(&number(Entry { key: b, value: 0 }, &NESTED))
+    };
+    entries
+        .dense_rows()
+        .sort_stable_rows_in(Some(&workspace), compare)
+        .unwrap();
+    assert_eq!(counts[0].load(SeqCst), 0);
+    entries.reverse();
+    assert_eq!(
+        entries
+            .dense_rows()
+            .sort_stable_rows_in(Some(&workspace), compare),
+        Err(memory::AllocError::CapacityOverflow)
+    );
+    for (i, entry) in entries.iter().enumerate() {
+        assert_eq!(number(entry, &NESTED), (63 - i) as u128);
+        assert_addresses(&entries, i, entry);
+    }
+    entries
+        .dense_rows()
+        .sort_stable_rows_in(Some(&workspace), compare)
+        .unwrap();
+    for (i, entry) in entries.iter().enumerate() {
+        assert_eq!(number(entry, &NESTED), i as u128);
+        assert_addresses(&entries, i, entry);
+    }
+    assert_eq!(counts[0].load(SeqCst), 2);
+    assert_eq!(counts[1].load(SeqCst), 1);
+}
+
+#[test]
 fn inconsistent_or_panicking_stable_comparison_keeps_every_row_and_address() {
     let mut entries = filled(&NESTED, 4096);
     entries.reverse();
