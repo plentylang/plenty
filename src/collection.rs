@@ -78,9 +78,17 @@ pub struct KeySort {
     pub error: Option<Ty>,
     /// A stable merge sort, which reserves workspace and so adds `AllocError`.
     pub stable: bool,
+    /// Temporary storage only; neither rows nor callback results acquire this policy.
+    pub selected_workspace: bool,
 }
 
 impl KeySort {
+    pub(crate) fn workspace_handle() -> Ty {
+        Ty::ForeignPtr(
+            "std.alloc.Handle".into(),
+            crate::foreign::Threads::Shareable,
+        )
+    }
     /// The sorted rows' element type.
     pub fn element(&self) -> Option<&Arc<Ty>> {
         match &self.list {
@@ -1133,7 +1141,10 @@ impl CollectionOp {
                 Ty::Unit,
             ),
             ListSortBy(sort) => (
-                vec![sort.receiver(), sort.callback.clone(), Ty::Bool],
+                [sort.receiver(), sort.callback.clone(), Ty::Bool]
+                    .into_iter()
+                    .chain(sort.selected_workspace.then(KeySort::workspace_handle))
+                    .collect(),
                 key_sort_output(sort.stable, sort.error.as_ref()).unwrap_or(Ty::Unit),
             ),
             ListScalarSetRef(t) => (

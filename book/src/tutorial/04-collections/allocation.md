@@ -260,6 +260,28 @@ so the saved scores stay the same when the caller updates the original. For a
 helper that just reads the scores, use the view directly and skip the copy.
 See [copy a slice view into a list](../../design/stdlib/alloc.md#copy-a-slice-view-into-a-list).
 
+## Select stable-sort workspace
+
+To keep equal-key rows in input order, lend the rows and select only the
+temporary merge storage. The list keeps its original allocator.
+
+```plenty
+import std.alloc as alloc
+
+def group(row: &(i64, str)) -> i64:
+    row[0]
+
+def main() -> Result[(), AllocError | IoError]:
+    mut rows = [(2, "first"), (1, "low"), (2, "last")]?
+    alloc.system().sort_stable_by_key(&mut rows, group)?
+    print(rows)?
+    Ok(())
+```
+
+```output
+[(1, "low"), (2, "first"), (2, "last")]
+```
+
 ## Keep part of a byte frame
 
 Suppose a frame wraps its payload in brackets. To save the payload in reverse

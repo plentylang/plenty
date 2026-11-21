@@ -276,6 +276,14 @@ impl Rows<'_> {
     /// scratch rows always return to the list before this returns.
     pub fn sort_stable_rows_by(
         &mut self,
+        compare: impl FnMut(u128, u128) -> Ordering,
+    ) -> Result<(), memory::AllocError> {
+        self.sort_stable_rows_in(None, compare)
+    }
+
+    pub(crate) fn sort_stable_rows_in(
+        &mut self,
+        workspace: Option<&crate::allocator::Allocator>,
         mut compare: impl FnMut(u128, u128) -> Ordering,
     ) -> Result<(), memory::AllocError> {
         let len = self.len();
@@ -286,10 +294,23 @@ impl Rows<'_> {
             .checked_mul(self.stride)
             .ok_or(memory::AllocError::CapacityOverflow)?;
         // Aligned words, as list storage uses, hold the rows for direct reads.
-        let mut scratch = Vec::<u128>::new();
-        memory::try_reserve(&mut scratch, bytes.div_ceil(16))?;
+        let words = bytes.div_ceil(16);
+        let mut ordinary;
+        let mut selected;
+        let scratch = if let Some(allocator) = workspace {
+            let layout = std::alloc::Layout::array::<u128>(words)
+                .map_err(|_| memory::AllocError::CapacityOverflow)?;
+            selected = allocator.allocate(layout)?;
+            // SAFETY: the block provides layout's size and alignment and is
+            // exclusively borrowed until the merge restores all moved rows.
+            unsafe { std::slice::from_raw_parts_mut(selected.as_mut_ptr().cast(), words) }
+        } else {
+            ordinary = Vec::<u128>::new();
+            memory::try_reserve(&mut ordinary, words)?;
+            ordinary.spare_capacity_mut()
+        };
         let relocation = Relocation::of(self.key);
-        self.merge_sort_rows(0, len, &mut scratch, relocation, &mut compare);
+        self.merge_sort_rows(0, len, scratch, relocation, &mut compare);
         Ok(())
     }
 
@@ -297,7 +318,7 @@ impl Rows<'_> {
         &mut self,
         start: usize,
         end: usize,
-        scratch: &mut Vec<u128>,
+        scratch: &mut [std::mem::MaybeUninit<u128>],
         relocation: Relocation,
         compare: &mut impl FnMut(u128, u128) -> Ordering,
     ) {
@@ -331,14 +352,14 @@ impl Rows<'_> {
         start: usize,
         middle: usize,
         end: usize,
-        scratch: &mut Vec<u128>,
+        scratch: &mut [std::mem::MaybeUninit<u128>],
         relocation: Relocation,
         compare: &mut impl FnMut(u128, u128) -> Ordering,
     ) {
         let stride = self.stride;
         let left = middle - start;
         // `left <= len / 2` rows, which the caller reserved.
-        debug_assert!(left * stride <= scratch.capacity() * 16);
+        debug_assert!(left * stride <= std::mem::size_of_val(scratch));
         let base = self.data.as_mut_ptr();
         let packed = self.packed;
         let ty = self.key;

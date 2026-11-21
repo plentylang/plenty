@@ -196,7 +196,7 @@ failure and growth after the source and allocator handle are dropped.
 | `sort` and `sort_by_key` on a list or exclusive view | Reorder existing rows in place, with no heap workspace for the sort itself. Neither operation changes the allocating owner. A key callback can still allocate or fail under its own policy. |
 | `sort_stable_by_key` on a list or exclusive view | Tests adjacent keys first. Already ordered input (including zero or one row) needs no workspace. Once an inversion is found, the runtime checks the size for half the rows, rounds to aligned words, and reserves an ordinary system-backed scratch vector. This happens **even for a selected list**. Workspace refusal leaves every row in place, although the key may already have run. |
 
-Both stable entry points in `plenty-runtime/src/aggregates.rs` delegate to
+`workspace.sort_stable_by_key(&mut rows, key)` uses the same merge and ordered-input scan, but the temporary aligned block belongs to `workspace`. The runtime borrows the provider before inspecting the descriptor. No selected owner escapes the call. Both ordinary stable entry points in `plenty-runtime/src/aggregates.rs` delegate to
 `Rows::sort_stable_rows_by` in `plenty-runtime/src/entries/sort.rs`.
 Merge scratch temporarily holds moved rows, not copies of their nested
 owners. Those rows return to the list or view before scratch is freed;

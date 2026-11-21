@@ -61,6 +61,7 @@ impl Owner {
 #[derive(Default)]
 pub(super) struct Providers {
     owners: Vec<Owner>,
+    sort_workspace: bool,
     state_owns_selected: bool,
     mutexes: Vec<Ty>,
     targets: CallableTargets,
@@ -101,6 +102,7 @@ impl Providers {
         }
         let dead = crate::op::reachability::dead_definitions(ops, &[], false);
         let mut owners = Vec::new();
+        let mut sort_workspace = false;
         let mut states = Vec::new();
         let mut addresses = Vec::new();
         for op in ops {
@@ -111,6 +113,7 @@ impl Providers {
                 if let Op::FunctionAddress(name, sig) = op {
                     addresses.push((name.as_str(), sig));
                 }
+                sort_workspace |= matches!(op, Op::Collection(CollectionOp::ListSortBy(sort)) if sort.selected_workspace);
                 if let Some(kind) = Owner::producer(op)
                     && !owners.contains(&kind)
                 {
@@ -121,7 +124,7 @@ impl Providers {
                 }
             });
         }
-        if states.is_empty() || owners.is_empty() {
+        if states.is_empty() || (owners.is_empty() && !sort_workspace) {
             return Self::default();
         }
         // A last Allocator drop destroys its erased state. The owner and the
@@ -134,6 +137,7 @@ impl Providers {
         let mutexes = threading::mutexes(states);
         Self {
             owners,
+            sort_workspace,
             state_owns_selected,
             targets: if mutexes.is_empty() {
                 CallableTargets::default()
@@ -233,8 +237,14 @@ impl Providers {
         effects: &mut WorkerEffects,
         functions: &mut Vec<String>,
     ) {
-        if self.owners.is_empty() {
+        if self.owners.is_empty() && !self.sort_workspace {
             return;
+        }
+        if self.sort_workspace
+            && matches!(op, Op::Collection(CollectionOp::ListSortBy(sort)) if sort.selected_workspace)
+        {
+            effects.waits = true;
+            effects.provider_lock |= sources.allocator;
         }
         // An indirect call is already a wait. To learn whether it reaches
         // an allocator callback, use the same closed targets as certification.

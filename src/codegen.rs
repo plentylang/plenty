@@ -1348,6 +1348,7 @@ struct Runtime {
     /// `plenty_view_sort_stable_by(...)`, as `view_sort_by`, returning the
     /// high word of `Result[(), AllocError]`.
     view_sort_stable_by: FuncId,
+    view_sort_stable_in: FuncId,
     /// `plenty_byte_view_rows(owner) -> first byte address`, for a read-only
     /// cache of a byte buffer.
     byte_view_rows: FuncId,
@@ -1690,6 +1691,20 @@ fn declare_runtime(module: &mut ObjectModule, test_hooks: bool) -> Result<Runtim
             "plenty_view_sort_by",
             &[PTR_TY, types::I64, PTR_TY, PTR_TY, types::I64, PTR_TY],
             None,
+        )?,
+        view_sort_stable_in: helper(
+            module,
+            "plenty_view_sort_stable_in",
+            &[
+                PTR_TY,
+                types::I64,
+                PTR_TY,
+                PTR_TY,
+                types::I64,
+                PTR_TY,
+                PTR_TY,
+            ],
+            Some(types::I64),
         )?,
         view_sort_stable_by: helper(
             module,

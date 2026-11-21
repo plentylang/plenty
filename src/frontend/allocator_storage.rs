@@ -101,6 +101,7 @@ pub(super) fn named(name: &str) -> bool {
             | "__allocator_copy"
             | "__allocator_block"
             | "__allocator_block_release"
+            | "__allocator_stable_sort"
             | "__allocator_block_len"
             | "__allocator_block_alignment"
             | "__allocator_block_get"
@@ -149,6 +150,22 @@ impl Lower<'_> {
             "__allocator_register" | "__allocator_commit" | "__allocator_block_take"
         ) {
             return self.allocator_provider(name, types, args, at, ops);
+        }
+        if name == "__allocator_stable_sort" {
+            let [handle, rows, key, descending] = args else {
+                return Err(at.error("invalid allocator stable sort arguments"));
+            };
+            if !types.is_empty() || !matches!(self.list_view_type(rows), Some(Ty::View(_, true))) {
+                return Err(at.error("allocator stable sort requires an exclusive view"));
+            }
+            return self.key_sort_with_workspace(
+                rows,
+                &[key.clone(), descending.clone()],
+                at,
+                true,
+                Some(handle),
+                ops,
+            );
         }
         if !name.starts_with("__allocator_slot_") {
             return self.retained_allocator(name, types, args, at, ops);

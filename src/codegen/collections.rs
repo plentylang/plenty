@@ -1065,6 +1065,14 @@ impl Lowerer<'_, '_> {
             return Ok(());
         }
         if let CollectionOp::ListSortBy(sort) = operation {
+            let workspace = if sort.selected_workspace {
+                Some(
+                    self.pop_typed(crate::collection::KeySort::workspace_handle())?
+                        .0,
+                )
+            } else {
+                None
+            };
             let (descending, _) = self.pop_typed(Ty::Bool)?;
             let (callback, _) = self.pop_typed(sort.callback.clone())?;
             let (receiver, _) = self.pop_typed(sort.receiver())?;
@@ -1103,10 +1111,12 @@ impl Lowerer<'_, '_> {
             let descending = self.bcx.ins().uextend(types::I64, descending);
             operands.extend([adapter, environment, descending]);
             operands.extend(descriptor);
+            operands.extend(workspace);
             let function = match (descriptor.is_some(), sort.stable) {
                 (false, false) => self.runtime.list_sort_by,
                 (false, true) => self.runtime.list_sort_stable_by,
                 (true, false) => self.runtime.view_sort_by,
+                (true, true) if workspace.is_some() => self.runtime.view_sort_stable_in,
                 (true, true) => self.runtime.view_sort_stable_by,
             };
             let function = self.module.declare_func_in_func(function, self.bcx.func);

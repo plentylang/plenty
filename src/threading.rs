@@ -166,6 +166,7 @@ fn check_with_exports(
     let mut retained_allocator = false;
     let mut actor = false;
     walk(ops, &mut |op| {
+        retained_allocator |= matches!(op, Op::Collection(crate::collection::CollectionOp::ListSortBy(sort)) if sort.selected_workspace);
         retained_allocator |= matches!(
             op,
             Op::Thread(ThreadOp::AllocatorUse | ThreadOp::AllocatorProvider(_))

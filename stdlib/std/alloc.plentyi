@@ -114,6 +114,9 @@ pub class Allocator:
             output.append(value)?
         Ok(output)
 
+    pub def sort_stable_by_key[T, F](self, rows: &mut [T], key: &F, descending: bool = False) -> Result[(), AllocError]:
+        __allocator_stable_sort(self._handle, rows, key, descending)
+
     pub def slice[T](self, source: &list[T], start: i64 | Unset = Unset.Unset, stop: i64 | Unset = Unset.Unset, step: NonZero[i64] = 1) -> Result[list[T], AllocError]:
         __allocator_list_slice[T](self._handle, source, _slice_bound(start), _slice_bound(stop), step.get())
 

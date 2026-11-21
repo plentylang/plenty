@@ -17,6 +17,66 @@ fn native(source: &str) -> String {
 }
 
 #[test]
+fn allocator_workspace_sorts_a_list_and_its_exclusive_subrange() {
+    assert_eq!(
+        native(
+            r#"
+import std.alloc as alloc
+
+def key(value: &i64) -> i64:
+    *value
+
+def fail(value: &i64) -> Result[i64, str]:
+    Err("key failed")
+
+def main() -> Result[(), AllocError | IoError]:
+    workspace = alloc.system()
+    mut rows = [4, 3, 1, 2]?
+    workspace.sort_stable_by_key(&mut rows[1:3], key)?
+    print(rows)?
+    workspace.sort_stable_by_key(&mut rows, key, True)?
+    print(rows)?
+    match workspace.sort_stable_by_key(&mut rows, fail):
+        case Err(error):
+            print(error)?
+        case Ok(_):
+            print("unexpected")?
+    Ok(())
+"#
+        ),
+        "[4, 1, 3, 2]\n[4, 3, 2, 1]\n\"key failed\""
+    );
+}
+
+#[test]
+fn selected_sort_skips_or_releases_workspace_and_preserves_rows_on_refusal() {
+    super::test_std_alloc::assert_stdout(
+        &format!(
+            r#"{}
+def key(value: &i64) -> i64:
+    *value
+
+def main() -> Result[(), AllocError | IoError]:
+    denied = budget("no", 0, AllocError.CapacityOverflow)
+    mut rows = [1, 2, 3]?
+    denied.sort_stable_by_key(&mut rows, key)?
+    match denied.sort_stable_by_key(&mut rows, key, True):
+        case Err(error):
+            print(error, rows)?
+        case Ok(_):
+            print("unexpected")?
+    one = budget("one", 1)
+    one.sort_stable_by_key(&mut rows, key, True)?
+    print(rows)?
+    Ok(())
+"#,
+            super::test_std_alloc_set_algebra::POLICY
+        ),
+        "refused no\nAllocError.CapacityOverflow [1, 2, 3]\n[3, 2, 1]\none 0 1\nno 0 0\n",
+    );
+}
+
+#[test]
 fn equal_keys_keep_input_order_in_both_directions() {
     // Each size crosses the 16-row insertion runs and several merge levels;
     // the reference is an unstable sort with an explicit position tie breaker.
