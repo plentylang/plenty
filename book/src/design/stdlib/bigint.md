@@ -101,18 +101,21 @@ arrays. Evaluation and interpolation scratch remains fallibly allocated.
 Division by a multiword divisor uses Knuth's Algorithm D on the stored
 64-bit limbs. It shifts the divisor so its top bit is set, then reuses one
 reciprocal of the leading limb to estimate each quotient digit. It subtracts
-the trial quotient product in place. Whole zero limbs at the low end of the
-divisor can be skipped, with the corresponding dividend limbs carried into
-the remainder. Division by a single word retains its short-division path.
+the trial quotient product in place, computing the borrow bits with
+word arithmetic. Whole zero limbs at the low end of the divisor can be
+skipped, with the corresponding dividend limbs carried into the remainder.
+Division by a single word retains its short-division path.
 Long division remains quadratic for balanced operands. Rendering caches
 prepared divisors across splits that use the same radix power. Parsing and
-non-power-of-two rendering split digit ranges recursively and share radix powers within a
-conversion. The renderer bounds the digit count from the bit length, compares
-against one exact radix power if those bounds straddle the cap, and writes
+non-power-of-two rendering split digit ranges recursively and share radix
+powers within a conversion. The renderer bounds the digit count from the bit
+length, compares against one exact radix power if those bounds straddle the
+cap, and writes
 ASCII digits into a shared buffer. At the leaves, short division by a
-one-digit radix power extracts several characters at a time. Bases 2, 4, 8,
-16, and 32 extract bit groups directly. Single-word rendering uses scalar
-division without a power cache. Conversion scratch allocations are fallible.
+one-word radix power extracts several characters at a time. Each render
+computes its chunk divisor's reciprocal once. Decimal chunks contain 19
+digits. Bases 2, 4, 8, 16, and 32 extract bit groups directly. Single-word
+rendering uses scalar division without a power cache. Conversion scratch allocations are fallible.
 Truncated vector transforms and specialized squaring are not implemented.
 No native multiplication kernel is used, and crossover choices are implementation
 details, not performance promises.

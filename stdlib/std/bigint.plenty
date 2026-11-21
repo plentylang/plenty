@@ -5,8 +5,8 @@
 # Large multiplication independently implements small-prime NTT/CRT, with
 # 128-bit digit packing and exact Montgomery reduction:
 # https://flintlib.org/doc/algorithms/fft/multimodular.html
-# Malachite 0.14 informed grouped radix rendering and division by
-# normalized limbs with a precomputed top-limb reciprocal.
+# Malachite 0.14 informed word-sized digit groups and reciprocal division
+# on normalized limbs.
 # No third-party code or data is included.
 from std.bytes import to_text, BytesError
 from std.fmt import Formatter, FormatError
@@ -426,19 +426,21 @@ def parse_digits(data: &[u8], start: i64, stop: i64, radix: i64, powers: &mut Ra
         shifted = (left * power)?
         shifted + right
 
-# A radix power below 2^32 lets a short-division step divide a pair of
-# base-2^32 words using just u64 arithmetic.
+# A word-sized radix power lets short division extract a full group of
+# digits at a time. Normalize the divisor and invert it once per render.
 @copy
 class RadixChunk:
-    divisor: u64
     width: i64
     log_floor: i64
+    shift: u64
+    divisor: u64
+    inverse: u64
 
 def radix_chunk(radix: u64) -> RadixChunk:
     unchecked:
         mut divisor = radix
         mut width = 1
-        while divisor <= 4294967295u64 // radix:
+        while divisor <= u64.MAX // radix:
             divisor *= radix
             width += 1
         mut bits = 0
@@ -446,7 +448,9 @@ def radix_chunk(radix: u64) -> RadixChunk:
         while high > 1u64:
             high >>= 1u64
             bits += 1
-        RadixChunk(divisor, width, bits)
+        shift = u64(63 - bits)
+        normalized = divisor << shift
+        RadixChunk(width, bits, shift, normalized, inverse_division_word(normalized))
 
 def render_one_word(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntError]:
     unchecked:
@@ -553,34 +557,36 @@ def render_word(value: u64, radix: u64, output: &mut [u8]) -> ():
             output[i] = alphabet[i64(digit)]
             n = q
 
+
 def render_chunks(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8]) -> Result[(), AllocError]:
     unchecked:
-        mut scratch = digits32(value)?
+        mut scratch = words(value)?
         mut size = len(scratch)
         mut end = len(output)
-        while size > 2:
-            remainder = divide_render_chunk(&mut scratch[:size], chunk.divisor)
+        while size > 1:
+            remainder = divide_render_chunk(&mut scratch[:size], chunk)
             end -= chunk.width
             render_word(remainder, radix, &mut output[end:end + chunk.width])
             if scratch[size - 1] == 0u64:
                 size -= 1
-        tail = scratch[0] | (scratch[1] << 32u64)
-        render_word(tail, radix, &mut output[:end])
+        render_word(scratch[0], radix, &mut output[:end])
         Ok(())
 
-def divide_render_chunk(words: &mut [u64], divisor: u64) -> u64:
+def divide_render_chunk(words: &mut [u64], chunk: RadixChunk) -> u64:
     unchecked:
+        shift = chunk.shift
+        # Keep the carried remainder normalized. Its low shift bits are
+        # zero because the normalized dividend and divisor share that factor.
         mut remainder = 0u64
         mut i = len(words)
         while i > 0:
             i -= 1
-            # The remainder is below the one-digit divisor. The pair fits
-            # u64 and its quotient fits one base-2^32 digit.
-            combined = (remainder << 32u64) | words[i]
-            quotient = combined // divisor
+            word = words[i]
+            hi = remainder | (0u64 if shift == 0u64 else word >> (64u64 - shift))
+            (quotient, rest) = estimate_division_word(hi, word << shift, chunk.divisor, chunk.inverse)
             words[i] = quotient
-            remainder = combined.wrapping_sub(quotient.wrapping_mul(divisor))
-        remainder
+            remainder = rest
+        remainder >> shift
 
 def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8], powers: &mut RadixPowers) -> Result[(), AllocError]:
     unchecked:
@@ -1134,8 +1140,8 @@ def quotient_remainder(a: &BigInt, b: &BigInt) -> Result[(BigInt, BigInt), Alloc
         remainder = (-remainder)?
     Ok((q, remainder))
 
-# The radix-2^32 leaf renderer and single-limb division share these
-# conversion helpers. Stored magnitudes use radix 2^64.
+# The short-division fallback uses radix 2^32 scratch for magnitudes
+# stored in radix 2^64.
 def digits32(value: &BigInt) -> Result[list[u64], AllocError]:
     unchecked:
         mut out = list[u64].with_capacity(value.word_len() * 2)?
@@ -1302,17 +1308,27 @@ def divide_wide_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64) ->
                 guess -= 1u64
             q[j] = guess
 
-# As in the narrow row, complement the old digit and add to the product.
-# The total is bounded by (B-1)^2 + 2*(B-1) = B^2-1.
+# Subtract the low product and the incoming borrow in two steps. Add
+# each step's borrow bit to the high product. Each bit follows from the
+# signs of a, b and a-b: when a and b have different top bits, borrow if
+# b has the top bit set. When they agree, use the top bit of a-b.
+# Computing the bits arithmetically keeps both subtractions branch-free.
 def subtract_wide_product(row: &mut [u64], v: &[u64], q: u64) -> u64:
     mut borrow = 0u64
     for i in range(len(row)):
         (lo, hi) = q.widening_mul(v[i])
-        (sum, carry0) = lo.carrying_add(borrow, False)
-        (difference, carry1) = sum.carrying_add(row[i] ^ u64.MAX, False)
-        row[i] = difference ^ u64.MAX
-        borrow = hi.wrapping_add(1u64 if carry0 else 0u64).wrapping_add(1u64 if carry1 else 0u64)
+        old = row[i]
+        difference = old.wrapping_sub(lo)
+        result = difference.wrapping_sub(borrow)
+        first = borrow_bit(old, lo, difference)
+        second = borrow_bit(difference, borrow, result)
+        row[i] = result
+        borrow = hi.wrapping_add(first).wrapping_add(second)
     borrow
+
+def borrow_bit(a: u64, b: u64, difference: u64) -> u64:
+    complement = a ^ u64.MAX
+    ((b & complement) | ((b | complement) & difference)) >> 63u64
 
 # Single stored limbs keep the base-2^32 Algorithm D path.
 def divide_narrow(a: &BigInt, b: &BigInt) -> Result[(list[u64], list[u64]), AllocError]:

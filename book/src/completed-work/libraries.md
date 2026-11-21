@@ -135,6 +135,21 @@ compiler modes. The algorithm and measurements are in
 quadratic, and issue #987 tracks multi-limb reciprocal reuse and other
 performance gaps.
 
+### Bigint division and rendering latency (issue #987)
+
+Word arithmetic now derives each trial-product borrow without a
+data-dependent branch. Radix leaves divide by a 64-bit radix power and
+share its reciprocal for the conversion. Decimal leaves extract 19
+digits per scan. The regression suite covers exact caps at chunk
+boundaries in both compiler modes.
+
+The latency measurements and Malachite algorithm trace are in
+`experiments/bigint-comparison/latency/`. The balanced division
+regression from the first 64-bit implementation is addressed. A
+recursive quotient-block prototype remains slower through 131,072 bits.
+Subquadratic division and multi-limb reciprocal reuse remain open under
+issue #987.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

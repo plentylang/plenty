@@ -28,7 +28,7 @@
 
 - Use the [consistency-check skill](.agents/skills/consistency-check/SKILL.md) to check one question, such as stale syntax or a renamed API, across every repository area with small read-only agents, and the [upstream-check skill](.agents/skills/upstream-check/SKILL.md) to review pinned dependencies, data and tools for releases and advisories. Both report only; neither edits files or pins.
 
-- For work that makes generated programs faster (bounds, overflow and other checks, register use, loop shape, inlining), follow `book/src/development/emitted-code.md` with the [emitted-code skill](.agents/skills/emitted-code/SKILL.md): isolate small kernels, compare their machine code with C's, and attribute every extra instruction before changing the compiler. Measure optimized builds by instruction count.
+- For work that makes generated programs faster (bounds, overflow and other checks, register use, loop shape, inlining), follow `book/src/development/emitted-code.md` with the [emitted-code skill](.agents/skills/emitted-code/SKILL.md): isolate small kernels, compare their machine code with C's, and attribute every extra instruction before changing the compiler. Judge optimized builds by elapsed time on representative workloads. Use cycles and instruction counts to explain the timing.
 
 - Docs are an mdBook in `book/src/`. `SUMMARY.md` lists every page in reading order.
 - Before writing Plenty code, read the executable syntax cheat sheet, `book/src/design/examples/cheatsheet.md`. Keep it current when syntax changes.

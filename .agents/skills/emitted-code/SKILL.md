@@ -10,9 +10,10 @@ and follow its steps in order; this skill only lists what to have ready.
 
 1. Build the compiler in your worktree (`cargo build --locked --release --bin plenty`)
    and measure optimized Plenty builds only; never a `--fast-compile` build.
-2. Count with `perf stat -e instructions:u` and per-pass counts from
-   `experiments/kernels/loops.py`; treat wall-clock time on a shared machine as
-   noise.
+2. Choose the implementation by elapsed time on representative inputs, using
+   pinned and interleaved batches. Diagnose differences with cycles and
+   instructions from `perf stat` and per-pass counts from
+   `experiments/kernels/loops.py`.
 3. Start from `experiments/kernels/` (kernels in Plenty and C, `loops.py`, the
    CLIF harness, and its README) rather than writing new tooling.
 4. Remove a check only when the compiler proves it cannot fail; keep trap

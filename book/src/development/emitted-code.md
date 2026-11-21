@@ -14,10 +14,12 @@ The worked example is local PR #917, whose kernels, scripts and results are in
 - **Measure optimized builds.** Builds are optimized by default; never time or
   count a `--fast-compile` build, which runs Cranelift at `opt_level=none` and
   skips call-site inlining.
-- **Count instructions, not time.** `perf stat -e instructions:u` and
-  per-pass counts read from assembly do not depend on machine load. Wall-clock
-  numbers on a shared machine are noise; take them last, alternating builds in
-  one session, and compare only within that session.
+- **Use elapsed time to judge a speedup.** Pin and interleave optimized
+  builds in one session and report medians across batches after warmup.
+  Use representative input shapes and batch sizes that limit timing noise.
+  Count instructions and cycles with `perf stat` and read per-pass counts
+  from assembly to explain the result. A shorter instruction stream can take
+  more time if it introduces stalls, dependencies, or branch mispredictions.
 - **Pin parallel programs** to physical cores (`taskset -c 0-7` on the
   reference laptop), so a busy machine does not change thread placement.
 - **Check outputs.** Every build in a comparison prints identical output.
@@ -137,7 +139,9 @@ checked out as `../wasmtime` on branch `fork`.
 - Add tests that fail on the old code: CLIF or asm dump tests asserting the
   check is gone or the shape changed, plus behavior tests for the cases that
   must still trap (negative, out of range, near `i64.MAX`).
-- Recount the kernel table, then the whole program, then compile time:
+- Recount the kernel and whole-program instructions. Time the representative
+  workloads and report their medians and run-to-run spread.
+- Measure the effect on compilation with
   `compile_bench 1000 10 --workload aot` with `PLENTY_CACHE=off` and a few
   larger programs compiled with `--compile`, counted with
   `perf stat -e instructions:u`. Report run-to-run spread.
@@ -146,7 +150,7 @@ checked out as `../wasmtime` on branch `fork`.
 ### 9. Record
 
 Put the kernel table, the attribution, the variant table and the
-whole-program counts in the PR description. Keep kernels and scripts in
+whole-program timings and counts in the PR description. Keep kernels and scripts in
 `experiments/` so the comparison can be rerun. File an issue for each
 remaining cause you did not fix.
 
@@ -177,8 +181,8 @@ remaining cause you did not fix.
 |---|---|---|
 | a | as dumped | |
 
-Whole program (instructions:u): before, after, C.
-Compile time (instructions:u): compile_bench aot, other programs; spread.
+Whole program: before, after, C. Median elapsed time and spread, cycles and instructions.
+Compilation: compile_bench aot, other programs. Elapsed time and instructions.
 Fixed here: ... Upstream: ... Remaining issues: #...
 ```
 

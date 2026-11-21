@@ -174,11 +174,15 @@ def main() -> Result[(), BigIntError | IoError]:
 "#,
     );
     let mut count = 0;
-    for (radix, exponent) in
-        (2..=36)
-            .map(|radix| (radix, 70))
-            .chain([(10, 1849), (10, 1850), (10, 1900), (10, 4096)])
-    {
+    for (radix, exponent) in (2..=36).map(|radix| (radix, 70)).chain([
+        (10, 19),
+        (10, 20),
+        (10, 38),
+        (10, 1849),
+        (10, 1850),
+        (10, 1900),
+        (10, 4096),
+    ]) {
         let last_digit = b"0123456789abcdefghijklmnopqrstuvwxyz"[radix - 1] as char;
         let before = last_digit.to_string().repeat(exponent);
         let power = format!("1{}", "0".repeat(exponent));

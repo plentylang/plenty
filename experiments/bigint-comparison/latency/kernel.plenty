@@ -1,0 +1,31 @@
+def subtract_wide_product(row: &mut [u64], v: &[u64], q: u64) -> u64:
+    mut borrow = 0u64
+    for i in range(len(row)):
+        (lo, hi) = q.widening_mul(v[i])
+        old = row[i]
+        difference = old.wrapping_sub(lo)
+        result = difference.wrapping_sub(borrow)
+        first = borrow_bit(old, lo, difference)
+        second = borrow_bit(difference, borrow, result)
+        row[i] = result
+        borrow = hi.wrapping_add(first).wrapping_add(second)
+    borrow
+
+def borrow_bit(a: u64, b: u64, difference: u64) -> u64:
+    complement = a ^ u64.MAX
+    ((b & complement) | ((b | complement) & difference)) >> 63u64
+
+def main() -> Result[(), AllocError | IoError | ParseError]:
+    argv = args()?
+    count = i64.parse(argv[1])?
+    guess = u64.parse(argv[2])?
+    mut row = [u64.MAX.wrapping_sub(u64(i)) for i in range(1024)]?
+    divisor = [u64.MAX ^ u64(i).wrapping_mul(15261831u64) for i in range(1024)]?
+    mut borrow = 0u64
+    for _ in range(count):
+        borrow = subtract_wide_product(&mut row, &divisor, guess)
+    mut checksum = 0u64
+    for word in &row:
+        checksum = checksum.wrapping_mul(31u64).wrapping_add(*word)
+    print(borrow, checksum)?
+    Ok(())
