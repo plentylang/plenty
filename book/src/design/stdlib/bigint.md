@@ -101,10 +101,14 @@ disjoint regions of the final output, avoiding two owned recursive product
 arrays. Evaluation and interpolation scratch remains fallibly allocated.
 Division subtracts each trial quotient product through a bounded scratch view
 and packs the remainder directly from that scratch. The normalization passes
-are skipped when the scale factor is one. Parsing and rendering split digit
-ranges recursively, sharing binary
-and exact radix powers within one conversion. Single-word rendering uses scalar
-division without a power cache. All their scratch allocations are fallible.
+are skipped when the scale factor is one. Parsing and non-power-of-two
+rendering split digit ranges recursively and share radix powers within a
+conversion. The renderer bounds the digit count from the bit length, compares
+against one exact radix power if those bounds straddle the cap, and writes
+ASCII digits into a shared buffer. At the leaves, short division by a
+one-digit radix power extracts several characters at a time. Bases 2, 4, 8,
+16, and 32 extract bit groups directly. Single-word rendering uses scalar
+division without a power cache. Conversion scratch allocations are fallible.
 Truncated vector transforms and specialized squaring are not implemented.
 No native multiplication kernel is used, and crossover choices are implementation
 details, not performance promises.
@@ -144,3 +148,7 @@ numeric carry bit, not a mode selection.
   integer radix-2 implementation; no FLINT/Malachite code or tables ship.
 - Peter L. Montgomery, [Modular multiplication without trial division](https://doi.org/10.1090/S0025-5718-1985-0777282-X):
   exact modular arithmetic for transform residues, roots and products.
+- [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
+  bit-length sizing, direct power-of-two rendering and grouped short division.
+  The implementation uses Plenty's own arithmetic and ships no Malachite code
+  or data.

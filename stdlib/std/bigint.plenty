@@ -5,7 +5,9 @@
 # Large multiplication independently implements small-prime NTT/CRT, with
 # 128-bit digit packing and exact Montgomery reduction:
 # https://flintlib.org/doc/algorithms/fft/multimodular.html
+# Radix rendering was informed by Malachite 0.14's grouped conversion.
 # No third-party code or data is included.
+from std.bytes import to_text, BytesError
 from std.fmt import Formatter, FormatError
 
 @copy
@@ -301,15 +303,7 @@ pub class BigInt:
             return Err(BigIntError.InvalidRadix)
         if self.word_len() <= 1:
             return render_one_word(self, radix, max_digits.get())
-        mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?)
-        width = digit_count(self, radix, max_digits.get(), &mut powers).map_error(BigIntError.Allocation)?
-        if width > max_digits.get():
-            return Err(BigIntError.LimitExceeded)
-        mut digits = list[str]().map_error(BigIntError.Allocation)?
-        if self.is_negative():
-            digits.append("-").map_error(BigIntError.Allocation)?
-        render_digits(self, radix, width, &mut digits, &mut powers).map_error(BigIntError.Allocation)?
-        "".join(&digits).map_error(BigIntError.Allocation)
+        render_large(self, radix, max_digits.get())
 
     pub def display[W](self, out: &mut Formatter[W]) -> Result[(), FormatError]:
         match self.to_string():
@@ -413,62 +407,176 @@ def parse_digits(data: &[u8], start: i64, stop: i64, radix: i64, powers: &mut Ra
         shifted = (left * power)?
         shifted + right
 
-def digit_count(value: &BigInt, radix: i64, limit: i64, powers: &mut RadixPowers) -> Result[i64, AllocError]:
-    if value.is_zero():
-        return Ok(1)
+# A radix power below 2^32 lets a short-division step divide a pair of
+# base-2^32 words using just u64 arithmetic.
+@copy
+class RadixChunk:
+    divisor: u64
+    width: i64
+    log_floor: i64
+
+def radix_chunk(radix: u64) -> RadixChunk:
     unchecked:
-        possible = value.word_len() * 64 + 1
-        mut high = possible if limit >= possible else limit + 1
-        mut low = 1
-        while low < high:
-            middle = low + (high - low) // 2
-            power = powers.power(middle)?
-            if magnitude_cmp(value, power) < 0:
-                high = middle
-            else:
-                low = middle + 1
-        Ok(low)
+        mut divisor = radix
+        mut width = 1
+        while divisor <= 4294967295u64 // radix:
+            divisor *= radix
+            width += 1
+        mut bits = 0
+        mut high = divisor
+        while high > 1u64:
+            high >>= 1u64
+            bits += 1
+        RadixChunk(divisor, width, bits)
 
 def render_one_word(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntError]:
     unchecked:
-        mut count = value.word(0)
+        word = value.word(0)
+        mut count = word
         mut width = 1
         while count >= u64(radix):
             count //= u64(radix)
             width += 1
         if width > limit:
             return Err(BigIntError.LimitExceeded)
-        mut digits = list[str]().map_error(BigIntError.Allocation)?
-        if value.is_negative():
-            digits.append("-").map_error(BigIntError.Allocation)?
-        render_word(value.word(0), radix, width, &mut digits).map_error(BigIntError.Allocation)?
-        "".join(&digits).map_error(BigIntError.Allocation)
+        sign = 1 if value.is_negative() else 0
+        mut digits = [0u8 for _ in range(width + sign)].map_error(BigIntError.Allocation)?
+        render_word(word, u64(radix), &mut digits[sign:])
+        if sign != 0:
+            digits[0] = 45u8
+        render_text(&digits)
 
-def render_word(value: u64, radix: i64, width: i64, output: &mut list[str]) -> Result[(), AllocError]:
+def render_text(digits: &[u8]) -> Result[str, BigIntError]:
+    match to_text(digits):
+        case Ok(text):
+            Ok(text)
+        case Err(BytesError.Allocation(cause)):
+            Err(BigIntError.Allocation(cause))
+        case Err(_):
+            __trap("std.bigint: render produced non-ASCII digits")
+
+def render_large(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntError]:
+    unchecked:
+        bits = value.bit_length()
+        if radix & (radix - 1) == 0:
+            return render_power_of_two(value, u64(radix), bits, limit)
+        chunk = radix_chunk(u64(radix))
+        # 2^log_floor <= radix^chunk.width < 2^(log_floor + 1).
+        # Split the products into quotient and remainder to avoid overflow.
+        low_bits = bits - 1
+        ceil_log = chunk.log_floor + 1
+        lower_whole = (low_bits // ceil_log) * chunk.width
+        lower_fraction = ((low_bits % ceil_log) * chunk.width) // ceil_log
+        if limit < lower_whole + lower_fraction + 1:
+            return Err(BigIntError.LimitExceeded)
+        upper_whole = (bits // chunk.log_floor) * chunk.width
+        upper_fraction = ((bits % chunk.log_floor) * chunk.width + chunk.log_floor - 1) // chunk.log_floor
+        upper = upper_whole + upper_fraction
+        mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?)
+        if limit < upper:
+            powers.compute(limit).map_error(BigIntError.Allocation)?
+            boundary = powers.exact.get_ref(limit).unwrap()
+            if magnitude_cmp(value, boundary) >= 0:
+                return Err(BigIntError.LimitExceeded)
+        width = limit if limit < upper else upper
+        if width == i64.MAX:
+            return Err(BigIntError.Allocation(AllocError.CapacityOverflow))
+        # Reserve a byte for an optional minus sign immediately before the
+        # first significant digit, including when there is no leading padding.
+        mut digits = [0u8 for _ in range(width + 1)].map_error(BigIntError.Allocation)?
+        render_digits(value, u64(radix), chunk, &mut digits[1:], &mut powers).map_error(BigIntError.Allocation)?
+        # The magnitude is nonzero, so a significant digit ends this scan.
+        mut first = 1
+        while digits[first] == 48u8:
+            first += 1
+        if value.is_negative():
+            first -= 1
+            digits[first] = 45u8
+        render_text(&digits[first:])
+
+def render_power_of_two(value: &BigInt, radix: u64, bits: i64, limit: i64) -> Result[str, BigIntError]:
+    unchecked:
+        mut group = 1
+        mut high = radix >> 1u64
+        while high > 1u64:
+            high >>= 1u64
+            group += 1
+        width = (bits - 1) // group + 1
+        if width > limit:
+            return Err(BigIntError.LimitExceeded)
+        sign = 1 if value.is_negative() else 0
+        if width == i64.MAX and sign != 0:
+            return Err(BigIntError.Allocation(AllocError.CapacityOverflow))
+        mut digits = [0u8 for _ in range(width + sign)].map_error(BigIntError.Allocation)?
+        alphabet = b"0123456789abcdefghijklmnopqrstuvwxyz"
+        for i in range(width):
+            position = (width - 1 - i) * group
+            word = position // 64
+            shift = position % 64
+            mut digit = value.word(word) >> u64(shift)
+            if shift + group > 64:
+                digit |= value.word(word + 1) << u64(64 - shift)
+            digits[sign + i] = alphabet[i64(digit & (radix - 1u64))]
+        if sign != 0:
+            digits[0] = 45u8
+        render_text(&digits)
+
+def render_word(value: u64, radix: u64, output: &mut [u8]) -> ():
     unchecked:
         mut n = value
-        mut digits: list[str] = []?
-        alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-        for _ in range(width):
-            digits.append(alphabet[i64(n % u64(radix))])?
-            n //= u64(radix)
-        mut i = len(digits)
+        alphabet = b"0123456789abcdefghijklmnopqrstuvwxyz"
+        mut i = len(output)
         while i > 0:
             i -= 1
-            output.append(digits[i])?
+            q = n // radix
+            # q * radix <= n. Form the remainder from the quotient.
+            digit = n.wrapping_sub(q.wrapping_mul(radix))
+            output[i] = alphabet[i64(digit)]
+            n = q
+
+def render_chunks(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8]) -> Result[(), AllocError]:
+    unchecked:
+        mut scratch = digits32(value)?
+        mut size = len(scratch)
+        mut end = len(output)
+        while size > 2:
+            remainder = divide_render_chunk(&mut scratch[:size], chunk.divisor)
+            end -= chunk.width
+            render_word(remainder, radix, &mut output[end:end + chunk.width])
+            if scratch[size - 1] == 0u64:
+                size -= 1
+        tail = scratch[0] | (scratch[1] << 32u64)
+        render_word(tail, radix, &mut output[:end])
         Ok(())
 
-def render_digits(value: &BigInt, radix: i64, width: i64, output: &mut list[str], powers: &mut RadixPowers) -> Result[(), AllocError]:
+def divide_render_chunk(words: &mut [u64], divisor: u64) -> u64:
     unchecked:
-        if width <= 12:
-            return render_word(value.word(0), radix, width, output)
-        right_width = width // 2
-        power = powers.power(right_width)?
+        mut remainder = 0u64
+        mut i = len(words)
+        while i > 0:
+            i -= 1
+            # The remainder is below the one-digit divisor. The pair fits
+            # u64 and its quotient fits one base-2^32 digit.
+            combined = (remainder << 32u64) | words[i]
+            quotient = combined // divisor
+            words[i] = quotient
+            remainder = combined.wrapping_sub(quotient.wrapping_mul(divisor))
+        remainder
+
+def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8], powers: &mut RadixPowers) -> Result[(), AllocError]:
+    unchecked:
+        if value.word_len() <= 1:
+            render_word(value.word(0), radix, output)
+            return Ok(())
+        if value.word_len() <= 96:
+            return render_chunks(value, radix, chunk, output)
+        middle = len(output) - len(output) // 2
+        power = powers.power(len(output) - middle)?
         (q, r) = divide_magnitude(value, power)?
         left = canonical(False, q)
         right = canonical(False, r)
-        render_digits(&left, radix, width - right_width, output, &mut powers)?
-        render_digits(&right, radix, right_width, output, &mut powers)?
+        render_digits(&left, radix, chunk, &mut output[:middle], &mut powers)?
+        render_digits(&right, radix, chunk, &mut output[middle:], &mut powers)?
         Ok(())
 
 # Only this constructor can create a large representation. Zero has no sign;

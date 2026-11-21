@@ -1,0 +1,29 @@
+# The production short-division row, operating on base-2^32 digits.
+def divide_render_chunk(words: &mut [u64], divisor: u64) -> u64:
+    unchecked:
+        mut remainder = 0u64
+        mut i = len(words)
+        while i > 0:
+            i -= 1
+            # The remainder is below the one-digit divisor. The pair fits
+            # u64 and its quotient fits one base-2^32 digit.
+            combined = (remainder << 32u64) | words[i]
+            quotient = combined // divisor
+            words[i] = quotient
+            remainder = combined.wrapping_sub(quotient.wrapping_mul(divisor))
+        remainder
+
+def main() -> Result[(), AllocError | IoError | ParseError]:
+    argv = args()?
+    count = i64.parse(argv[1])?
+    divisor = u64.parse(argv[2])?
+    mut words = [4294967295u64.wrapping_sub(u64(i)) for i in range(2048)]?
+    mut checksum = 0u64
+    for i in range(count):
+        words[2047] = 4294967295u64.wrapping_sub(u64(i))
+        remainder = divide_render_chunk(&mut words, divisor)
+        checksum = checksum.wrapping_mul(31u64).wrapping_add(remainder)
+    for word in &words:
+        checksum = checksum.wrapping_mul(31u64).wrapping_add(*word)
+    print(checksum)?
+    Ok(())

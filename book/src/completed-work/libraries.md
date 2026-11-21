@@ -103,6 +103,22 @@ extracted row kernel are in `experiments/bigint-comparison/division/`.
 Large division remains quadratic when the quotient and divisor have
 similar digit counts. Issue #987 tracks the remaining performance gap.
 
+### Bigint radix rendering (issue #987)
+
+Multiword integers now render into one shared ASCII buffer sized from the
+bit length. Non-power-of-two leaves divide by a radix power that fits one
+base-2³² digit. Bases 2, 4, 8, 16, and 32 extract digits directly from the
+limbs. Exact caps still count magnitude digits, including when the sign
+requires an extra output byte.
+
+At 65,536 bits, decimal rendering used 74.7% fewer instructions on the
+Linux x86-64 reference host. The Malachite differential corpus matched all
+16,378 outputs, and regression tests cover exact caps for every radix in
+both compiler modes. The algorithm trace and measurements are in
+`experiments/bigint-comparison/radix-render/`. Large decimal rendering still
+uses quadratic division at recursive splits. Issue #987 also tracks parsing
+and multiplication performance.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

@@ -155,6 +155,53 @@ fn every_radix_round_trips_and_float_rounding_is_exact() {
 }
 
 #[test]
+fn radix_rendering_preserves_exact_caps_and_internal_zeroes() {
+    let mut source = String::from(
+        r#"from std.bigint import BigIntError, parse
+
+def check(text: str, radix: i64, width: NonNegative[i64], smaller: NonNegative[i64]) -> Result[(), BigIntError | IoError]:
+    value = parse(text, radix)?
+    exact = value.to_string(radix, width)?
+    too_small = match value.to_string(radix, smaller):
+        case Err(BigIntError.LimitExceeded):
+            True
+        case _:
+            False
+    print(exact == text, too_small)?
+    Ok(())
+
+def main() -> Result[(), BigIntError | IoError]:
+"#,
+    );
+    let mut count = 0;
+    for (radix, exponent) in
+        (2..=36)
+            .map(|radix| (radix, 70))
+            .chain([(10, 1849), (10, 1850), (10, 1900)])
+    {
+        let last_digit = b"0123456789abcdefghijklmnopqrstuvwxyz"[radix - 1] as char;
+        let before = last_digit.to_string().repeat(exponent);
+        let power = format!("1{}", "0".repeat(exponent));
+        let after = format!("-1{}1", "0".repeat(exponent - 1));
+        for (text, width) in [
+            (before, exponent),
+            (power, exponent + 1),
+            (after, exponent + 1),
+        ] {
+            source.push_str(&format!(
+                "    check(\"{text}\", {radix}, {width}, {})?\n",
+                width - 1,
+            ));
+            count += 1;
+        }
+    }
+    source.push_str("    Ok(())\n");
+    let expected = "True True\n".repeat(count);
+    assert_eq!(run_program(&source, false), expected);
+    assert_eq!(run_program(&source, true), expected);
+}
+
+#[test]
 fn large_products_and_division_cross_algorithm_boundaries() {
     let mut body = String::new();
     let mut expected = String::new();

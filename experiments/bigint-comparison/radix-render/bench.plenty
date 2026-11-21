@@ -1,0 +1,18 @@
+from std.bigint import BigIntError, parse
+from std.time import monotonic_now
+
+def main() -> Result[(), AllocError | BigIntError | IoError | ParseError]:
+    argv = args()?
+    value = parse(argv[1], 16, 100000)?
+    radix = i64.parse(argv[2])?
+    count = i64.parse(argv[3])?
+    if count == 0:
+        print(value.to_string(radix, 100000)?)?
+        return Ok(())
+    mut checksum = 0u64
+    start = monotonic_now()
+    for _ in range(count):
+        checksum = checksum.wrapping_add(u64(len(value.to_string(radix, 100000)?)))
+    elapsed = monotonic_now().saturating_duration_since(&start).as_nanoseconds()
+    print(elapsed, checksum)?
+    Ok(())
