@@ -177,7 +177,7 @@ def main() -> Result[(), BigIntError | IoError]:
     for (radix, exponent) in
         (2..=36)
             .map(|radix| (radix, 70))
-            .chain([(10, 1849), (10, 1850), (10, 1900)])
+            .chain([(10, 1849), (10, 1850), (10, 1900), (10, 4096)])
     {
         let last_digit = b"0123456789abcdefghijklmnopqrstuvwxyz"[radix - 1] as char;
         let before = last_digit.to_string().repeat(exponent);
@@ -199,6 +199,67 @@ def main() -> Result[(), BigIntError | IoError]:
     let expected = "True True\n".repeat(count);
     assert_eq!(run_program(&source, false), expected);
     assert_eq!(run_program(&source, true), expected);
+}
+
+#[test]
+fn wide_division_corrects_estimates_and_preserves_low_remainder() {
+    let source = r#"from std.bigint import BigInt, BigIntError, from_i64
+
+def check(a: &BigInt, b: &BigInt, quotient: &BigInt, remainder: &BigInt) -> Result[(), AllocError | BigIntError | IoError]:
+    negative_a = (-a)?
+    negative_b = (-b)?
+    negative_q = if remainder.is_zero():
+        (-quotient)?
+    else:
+        ((-quotient)? - from_i64(1))?
+    adjusted_r = if remainder.is_zero():
+        from_i64(0)
+    else:
+        (b - remainder)?
+    (q_pos, r_pos) = a.checked_divmod(b)?
+    (q_an, r_an) = negative_a.checked_divmod(b)?
+    (q_bn, r_bn) = a.checked_divmod(&negative_b)?
+    (q_both, r_both) = negative_a.checked_divmod(&negative_b)?
+    print(q_pos == quotient and r_pos == remainder,
+          q_an == negative_q and r_an == adjusted_r,
+          q_bn == negative_q and r_bn == (-adjusted_r)?,
+          q_both == quotient and r_both == (-remainder)?)?
+    Ok(())
+
+def main() -> Result[(), AllocError | BigIntError | IoError]:
+    one = from_i64(1)
+    word = (one << 64)?
+    upper = (one << 511)?
+    divisor = (upper + one)?
+    # The two leading divisor limbs admit a quotient one too high.
+    # The low limb forces the final add-back.
+    below_twice = ((divisor << 1)? - one)?
+    check(&below_twice, &divisor, &one, &upper)?
+    # The highest numerator limb equals the highest divisor limb in
+    # the final row, saturating the trial quotient at 2^64 - 1.
+    max_word = (word - one)?
+    below_shift = ((divisor << 64)? - one)?
+    check(&below_shift, &divisor, &max_word, &upper)?
+    # One limb below the top changes the preliminary trial correction.
+    next = (max_word << 384)?
+    trial_divisor = (divisor + next)?
+    trial_remainder = ((trial_divisor - (one << 384)?)? - one)?
+    trial_numerator = (trial_divisor + trial_remainder)?
+    check(&trial_numerator, &trial_divisor, &one, &trial_remainder)?
+    # Renormalize an unaligned divisor and retain two untouched low limbs.
+    trimmed = ((one << 520)? + one)?
+    shifted_divisor = (trimmed << 128)?
+    low_remainder = ((one << 128)? - one)?
+    shifted_a = ((shifted_divisor << 64)? + low_remainder)?
+    check(&shifted_a, &shifted_divisor, &word, &low_remainder)?
+    # A multiword divisor can have just one significant limb after trimming.
+    square_word = (word << 64)?
+    check(&square_word, &word, &word, &from_i64(0))?
+    Ok(())
+"#;
+    let expected = "True True True True\n".repeat(5);
+    assert_eq!(run_program(source, false), expected);
+    assert_eq!(run_program(source, true), expected);
 }
 
 #[test]

@@ -5,7 +5,8 @@
 # Large multiplication independently implements small-prime NTT/CRT, with
 # 128-bit digit packing and exact Montgomery reduction:
 # https://flintlib.org/doc/algorithms/fft/multimodular.html
-# Radix rendering was informed by Malachite 0.14's grouped conversion.
+# Malachite 0.14 informed grouped radix rendering and division by
+# normalized limbs with a precomputed top-limb reciprocal.
 # No third-party code or data is included.
 from std.bytes import to_text, BytesError
 from std.fmt import Formatter, FormatError
@@ -343,7 +344,7 @@ pub def parse(text: &strview, radix: i64 = 10, max_digits: NonNegative[i64] = 10
         value = if len(data) - start <= 12:
             parse_small(data, start, len(data), radix)
         else:
-            mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?)
+            mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
             parse_digits(data, start, len(data), radix, &mut powers).map_error(BigIntError.Allocation)?
         if negative:
             (-value).map_error(BigIntError.Allocation)
@@ -362,15 +363,33 @@ def digit_value(ch: u8) -> i64:
             -1
 
 # Each conversion shares the binary powers instead of squaring them again
-# at every recursive split and digit-count probe.
+# at every recursive split and digit-count probe. The normalized divisors
+# are created lazily and belong to the same conversion.
 class RadixPowers:
     values: list[BigInt]
     exact: dict[i64, BigInt]
+    prepared: Option[dict[i64, WideDivisor]]
 
     def power(self: &mut RadixPowers, exponent: i64) -> Result[&BigInt, AllocError]:
         if exponent not in self.exact:
             self.compute(exponent)?
         Ok(self.exact.get_ref(exponent).unwrap())
+
+    def divide(self: &mut RadixPowers, value: &BigInt, exponent: i64) -> Result[(list[u64], list[u64]), AllocError]:
+        if exponent not in self.exact:
+            self.compute(exponent)?
+        power = self.exact.get_ref(exponent).unwrap()
+        if power.word_len() < WIDE_DIVISION_LIMBS or magnitude_cmp(value, power) < 0:
+            return divide_narrow(value, power)
+        if self.prepared.is_none():
+            self.prepared = Some(dict[i64, WideDivisor]()?)
+        match &mut self.prepared:
+            case Some(divisors):
+                if exponent not in divisors:
+                    divisors.insert(exponent, prepare_wide_divisor(power)?)?
+                divide_wide(value, divisors.get_ref(exponent).unwrap())
+            case Nothing:
+                __trap("std.bigint: missing prepared divisor cache")
 
     def compute(self: &mut RadixPowers, exponent: i64) -> Result[(), AllocError]:
         unchecked:
@@ -472,7 +491,7 @@ def render_large(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntEr
         upper_whole = (bits // chunk.log_floor) * chunk.width
         upper_fraction = ((bits % chunk.log_floor) * chunk.width + chunk.log_floor - 1) // chunk.log_floor
         upper = upper_whole + upper_fraction
-        mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?)
+        mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
         if limit < upper:
             powers.compute(limit).map_error(BigIntError.Allocation)?
             boundary = powers.exact.get_ref(limit).unwrap()
@@ -571,8 +590,7 @@ def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u
         if value.word_len() <= 96:
             return render_chunks(value, radix, chunk, output)
         middle = len(output) - len(output) // 2
-        power = powers.power(len(output) - middle)?
-        (q, r) = divide_magnitude(value, power)?
+        (q, r) = powers.divide(value, len(output) - middle)?
         left = canonical(False, q)
         right = canonical(False, r)
         render_digits(&left, radix, chunk, &mut output[:middle], &mut powers)?
@@ -1116,8 +1134,8 @@ def quotient_remainder(a: &BigInt, b: &BigInt) -> Result[(BigInt, BigInt), Alloc
         remainder = (-remainder)?
     Ok((q, remainder))
 
-# Algorithm D in base 2^32: each double digit fits u64, including trial
-# quotient estimation. Storage remains u64 limbs outside this division scratch.
+# The radix-2^32 leaf renderer and single-limb division share these
+# conversion helpers. Stored magnitudes use radix 2^64.
 def digits32(value: &BigInt) -> Result[list[u64], AllocError]:
     unchecked:
         mut out = list[u64].with_capacity(value.word_len() * 2)?
@@ -1148,7 +1166,156 @@ def scale32(digits: &mut list[u64], factor: u64) -> Result[(), AllocError]:
             digits.append(carry)?
         Ok(())
 
+const WIDE_DIVISION_LIMBS: i64 = 2
+
 def divide_magnitude(a: &BigInt, b: &BigInt) -> Result[(list[u64], list[u64]), AllocError]:
+    if b.word_len() >= WIDE_DIVISION_LIMBS and magnitude_cmp(a, b) >= 0:
+        divisor = prepare_wide_divisor(b)?
+        return divide_wide(a, &divisor)
+    divide_narrow(a, b)
+
+# Normalize to a top limb of at least 2^63, omitting exactly zero low
+# divisor limbs. Store the extra numerator limb even when there is no carry.
+def normalize_division(value: &BigInt, first: i64, shift: u64, extra: i64) -> Result[list[u64], AllocError]:
+    unchecked:
+        count = value.word_len() - first
+        mut out = zeros(count + extra)?
+        if shift == 0u64:
+            for i in range(count):
+                out[i] = value.word(first + i)
+        else:
+            mut carry = 0u64
+            for i in range(count):
+                word = value.word(first + i)
+                out[i] = (word << shift) | carry
+                carry = word >> (64u64 - shift)
+            if extra != 0:
+                out[count] = carry
+        Ok(out)
+
+def inverse_division_word(divisor: u64) -> u64:
+    # The high limb of B^2-1 yields quotient one. Start with its
+    # remainder and shift in the 64 ones of the low limb.
+    mut inverse = 0u64
+    mut remainder = divisor ^ u64.MAX
+    for _ in range(64):
+        doubled = (remainder << 1u64) | 1u64
+        subtract = (remainder >> 63u64) != 0u64 or doubled >= divisor
+        remainder = doubled.wrapping_sub(divisor) if subtract else doubled
+        inverse = (inverse << 1u64) | (1u64 if subtract else 0u64)
+    inverse
+
+# A prepared divisor can be reused for every split by the same radix power.
+# The omitted low limbs are zero in the divisor, so the corresponding low
+# numerator limbs pass directly to the remainder.
+class WideDivisor:
+    first: i64
+    shift: u64
+    digits: list[u64]
+    inverse: u64
+
+def prepare_wide_divisor(value: &BigInt) -> Result[WideDivisor, AllocError]:
+    unchecked:
+        mut first = 0
+        while value.word(first) == 0u64:
+            first += 1
+        shift = u64((64 - value.bit_length() % 64) % 64)
+        digits = normalize_division(value, first, shift, 0)?
+        inverse = inverse_division_word(digits[-1])
+        Ok(WideDivisor(first, shift, digits, inverse))
+
+def divide_wide(a: &BigInt, b: &WideDivisor) -> Result[(list[u64], list[u64]), AllocError]:
+    unchecked:
+        first = b.first
+        shift = b.shift
+        n = len(b.digits)
+        mut u = normalize_division(a, first, shift, 1)?
+        mut q = zeros(len(u) - n)?
+        divide_wide_digits(&mut u, &b.digits, &mut q, b.inverse)
+        mut r = zeros(first + n)?
+        for i in range(first):
+            r[i] = a.word(i)
+        if shift == 0u64:
+            for i in range(n):
+                r[first + i] = u[i]
+        else:
+            for i in range(n - 1):
+                r[first + i] = (u[i] >> shift) | (u[i + 1] << (64u64 - shift))
+            r[-1] = u[n - 1] >> shift
+        Ok((q, r))
+
+# With B = 2^64 and hi < d, floor((hi*B+lo)*(B+inverse)/B^2)
+# is at most one below the exact quotient. The three-term carry from
+# hi*inverse + lo + high(lo*inverse) forms the high half of this product.
+# Use q*d to correct the quotient and obtain the remainder.
+def estimate_division_word(hi: u64, lo: u64, d: u64, inverse: u64) -> (u64, u64):
+    (p0, p1) = hi.widening_mul(inverse)
+    (_, p2) = lo.widening_mul(inverse)
+    (sum, carry0) = p0.carrying_add(lo, False)
+    (_, carry1) = sum.carrying_add(p2, False)
+    q = hi.wrapping_add(p1).wrapping_add(1u64 if carry0 else 0u64).wrapping_add(1u64 if carry1 else 0u64)
+    (low, high) = q.widening_mul(d)
+    r = lo.wrapping_sub(low)
+    overflow = hi != high.wrapping_add(1u64 if lo < low else 0u64)
+    if overflow or r >= d:
+        (q.wrapping_add(1u64), r.wrapping_sub(d))
+    else:
+        (q, r)
+
+def divide_wide_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64) -> ():
+    unchecked:
+        n = len(v)
+        divisor = v[n - 1]
+        mut j = len(q)
+        while j > 0:
+            j -= 1
+            hi = u[j + n]
+            lo = u[j + n - 1]
+            mut guess = u64.MAX
+            mut residual = lo.wrapping_add(divisor)
+            mut residual_wide = residual < lo
+            if hi != divisor:
+                (trial, rem) = estimate_division_word(hi, lo, divisor, inverse)
+                guess = trial
+                residual = rem
+                residual_wide = False
+            if n > 1:
+                next = u[j + n - 2]
+                while not residual_wide:
+                    (low, high) = guess.widening_mul(v[n - 2])
+                    if high < residual or (high == residual and low <= next):
+                        break
+                    guess -= 1u64
+                    updated = residual.wrapping_add(divisor)
+                    residual_wide = updated < residual
+                    residual = updated
+            # This high limb is outside every later row. Only its borrow
+            # determines whether the divisor must be added back.
+            row = &mut u[j:j + n]
+            borrow = subtract_wide_product(row, v, guess)
+            if hi < borrow:
+                mut carry = False
+                for i in range(n):
+                    (word, overflow) = row[i].carrying_add(v[i], carry)
+                    row[i] = word
+                    carry = overflow
+                guess -= 1u64
+            q[j] = guess
+
+# As in the narrow row, complement the old digit and add to the product.
+# The total is bounded by (B-1)^2 + 2*(B-1) = B^2-1.
+def subtract_wide_product(row: &mut [u64], v: &[u64], q: u64) -> u64:
+    mut borrow = 0u64
+    for i in range(len(row)):
+        (lo, hi) = q.widening_mul(v[i])
+        (sum, carry0) = lo.carrying_add(borrow, False)
+        (difference, carry1) = sum.carrying_add(row[i] ^ u64.MAX, False)
+        row[i] = difference ^ u64.MAX
+        borrow = hi.wrapping_add(1u64 if carry0 else 0u64).wrapping_add(1u64 if carry1 else 0u64)
+    borrow
+
+# Single stored limbs keep the base-2^32 Algorithm D path.
+def divide_narrow(a: &BigInt, b: &BigInt) -> Result[(list[u64], list[u64]), AllocError]:
     unchecked:
         if magnitude_cmp(a, b) < 0:
             empty: list[u64] = []?

@@ -119,6 +119,22 @@ both compiler modes. The algorithm trace and measurements are in
 uses quadratic division at recursive splits. Issue #987 also tracks parsing
 and multiplication performance.
 
+### Bigint 64-bit division (issue #987)
+
+Multiword division now works on 64-bit limbs and reuses the reciprocal of
+the normalized leading limb for each quotient estimate. Recursive radix
+rendering shares each prepared divisor by exponent. Skipping whole zero
+limbs in the divisor reduces the work for powers of ten.
+
+At 65,536 bits, balanced division used 55% fewer instructions and decimal
+rendering used 42% fewer on the Linux x86-64 reference host. All 16,378
+outputs in the Malachite corpus matched. Regression tests cover quotient
+correction, low remainder limbs, signs and recursive radix caps in both
+compiler modes. The algorithm and measurements are in
+`experiments/bigint-comparison/wide-division/`. Long division remains
+quadratic, and issue #987 tracks multi-limb reciprocal reuse and other
+performance gaps.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

@@ -94,15 +94,19 @@ limb count up to a pair, including padding for odd limb counts. The primes'
 2⁴⁰ transform order exceeds this retained cap. Other shapes use Toom-3,
 Karatsuba, or schoolbook multiplication as applicable. This transform bound
 is an algorithm-selection limit, not a limit on BigInt precision.
-Division uses Knuth's Algorithm D with temporary base-2³² digits so trial
-quotients fit `u64`. Karatsuba and Toom-3 borrow operand limb views and write
+Karatsuba and Toom-3 borrow operand limb views and write
 their low and high products (the evaluations at 0 and infinity) directly into
 disjoint regions of the final output, avoiding two owned recursive product
 arrays. Evaluation and interpolation scratch remains fallibly allocated.
-Division subtracts each trial quotient product through a bounded scratch view
-and packs the remainder directly from that scratch. The normalization passes
-are skipped when the scale factor is one. Parsing and non-power-of-two
-rendering split digit ranges recursively and share radix powers within a
+Division by a multiword divisor uses Knuth's Algorithm D on the stored
+64-bit limbs. It shifts the divisor so its top bit is set, then reuses one
+reciprocal of the leading limb to estimate each quotient digit. It subtracts
+the trial quotient product in place. Whole zero limbs at the low end of the
+divisor can be skipped, with the corresponding dividend limbs carried into
+the remainder. Division by a single word retains its short-division path.
+Long division remains quadratic for balanced operands. Rendering caches
+prepared divisors across splits that use the same radix power. Parsing and
+non-power-of-two rendering split digit ranges recursively and share radix powers within a
 conversion. The renderer bounds the digit count from the bit length, compares
 against one exact radix power if those bounds straddle the cap, and writes
 ASCII digits into a shared buffer. At the leaves, short division by a
@@ -149,6 +153,6 @@ numeric carry bit, not a mode selection.
 - Peter L. Montgomery, [Modular multiplication without trial division](https://doi.org/10.1090/S0025-5718-1985-0777282-X):
   exact modular arithmetic for transform residues, roots and products.
 - [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
-  bit-length sizing, direct power-of-two rendering and grouped short division.
-  The implementation uses Plenty's own arithmetic and ships no Malachite code
-  or data.
+  bit-length sizing, direct power-of-two rendering, grouped short division and
+  normalized leading-limb reciprocals. This is an independent Plenty
+  implementation.
