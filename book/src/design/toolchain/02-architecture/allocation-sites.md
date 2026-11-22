@@ -188,6 +188,8 @@ and exercises the native opcode with a finite-set descriptor.
 view and a direct `keys()` projection, including a scoped worker, provider
 failure and growth after the source and allocator handle are dropped.
 
+**Consuming into selected storage.** For keys, reserve `len(d)` slots with `out.list_with_capacity[K]` and append each key from `for key in d` (owned dictionary, not a view). No ordinary key snapshot is needed. Values drop with the source; if reservation fails in a function taking the dictionary by value, all its keys and values drop. For values, the loop over the dictionary yields the wrong component. A value view cannot transfer an arbitrary affine value; mutable iteration would need a replacement value. `d.into_values()?` moves the values without copying their nested storage, but still pays for an ordinary list before any selected destination.
+
 ## Consuming a list: destination growth versus new storage
 
 - `dst.extend(src)`: `Collection::try_extend` reserves the additional row count against **dst** before appending entries. Sufficient capacity means zero requests. Refusal consumes and drops the entire source but leaves the destination unchanged. The source releases its own list storage; transferred fields retain their backing. No merge scratch or independent result.

@@ -319,6 +319,8 @@ or owned expression directly, including dictionaries with affine payloads.
 They preserve insertion order and transfer the selected elements without copying.
 The dictionary is consumed on success and failure. Output reservation happens
 before any transfer; allocation failure drops the remaining source exactly once.
+Both consuming methods build ordinary system-backed lists, regardless of the dictionary's allocator. To select the result list for **keys**, [reserve and iterate the owned dictionary](../../../tutorial/04-collections/allocation.md#move-dictionary-keys-into-selected-storage). There is no matching consuming value loop: `values()` lends its elements, and iterating keys prevents removing entries during the loop.
+
 Use `for value in dictionary.into_values()?:` when the dictionary is no longer
 needed. This is an owned snapshot, not a stored borrowed view.
 

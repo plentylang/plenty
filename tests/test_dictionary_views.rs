@@ -79,6 +79,45 @@ fn boxed_key_view_prevents_mutating_the_owner() {
     assert!(error.contains("conflicting borrow"), "{error}");
 }
 
+#[test]
+fn selected_dictionary_keys_transfer_or_drop_each_owner_once() {
+    super::test_std_alloc::assert_stdout(
+        &format!(
+            r#"{}
+class Key:
+    n: i64
+    def __del__(self) -> ():
+        print("key", self.n).unwrap()
+
+class Value:
+    n: i64
+    def __del__(self) -> ():
+        print("value", self.n).unwrap()
+
+def keys(out: &alloc.Allocator, rows: dict[Key, Value]) -> Result[list[Key], AllocError]:
+    mut result = out.list_with_capacity[Key](len(rows))?
+    for key in rows:
+        result.append(key)?
+    Ok(result)
+
+def main() -> Result[(), AllocError | IoError]:
+    out = budget("out", 3, AllocError.CapacityOverflow)
+    result = keys(&out, {{Key(2): Value(20), Key(1): Value(10)}}?)?
+    print(result[0].n, result[1].n)?
+    drop(result)
+    match keys(&out, {{Key(3): Value(30), Key(4): Value(40)}}?):
+        case Err(error):
+            print(error)?
+        case Ok(_):
+            print("unexpected")?
+    Ok(())
+"#,
+            super::test_std_alloc_set_algebra::POLICY
+        ),
+        "value 20\nvalue 10\n2 1\nkey 2\nkey 1\nrefused out\nkey 3\nvalue 30\nkey 4\nvalue 40\nAllocError.CapacityOverflow\nout 0 3\n",
+    );
+}
+
 #[cfg(feature = "runtime-checks")]
 #[test]
 fn into_keys_allocation_failure_consumes_and_drops_affine_values_once() {
