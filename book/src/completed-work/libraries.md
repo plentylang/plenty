@@ -147,8 +147,19 @@ The latency measurements and Malachite algorithm trace are in
 `experiments/bigint-comparison/latency/`. The balanced division
 regression from the first 64-bit implementation is addressed. A
 recursive quotient-block prototype remains slower through 131,072 bits.
-Subquadratic division and multi-limb reciprocal reuse remain open under
-issue #987.
+
+### Bigint recursive division and radix reciprocals (issue #987)
+
+Large balanced division processes quotient blocks recursively using
+multiplication to correct the truncated-divisor estimates. Non-power-of-two
+rendering shares a split exponent at each depth. Qualifying repeated
+splits cache a multi-limb Barrett reciprocal and use a cyclic transform for
+the correction product. Both algorithms use the existing fallible limb
+storage and retain the floor-division and exact digit-cap behavior.
+
+The algorithm trace and timings in `experiments/bigint-comparison/block-division/`
+record the crossover against optimized Algorithm D and Malachite. Issue #987
+tracks the remaining elapsed-time gap and broader crossover work.
 
 ### Release note: ordinary-path directory creation
 

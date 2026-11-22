@@ -5,8 +5,8 @@
 # Large multiplication independently implements small-prime NTT/CRT, with
 # 128-bit digit packing and exact Montgomery reduction:
 # https://flintlib.org/doc/algorithms/fft/multimodular.html
-# Malachite 0.14 informed word-sized digit groups and reciprocal division
-# on normalized limbs.
+# Malachite 0.14 informed word-sized digit groups, recursive quotient
+# blocks and cached Barrett reciprocals with cyclic correction products.
 # No third-party code or data is included.
 from std.bytes import to_text, BytesError
 from std.fmt import Formatter, FormatError
@@ -344,7 +344,7 @@ pub def parse(text: &strview, radix: i64 = 10, max_digits: NonNegative[i64] = 10
         value = if len(data) - start <= 12:
             parse_small(data, start, len(data), radix)
         else:
-            mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
+            mut powers = RadixPowers(radix, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
             parse_digits(data, start, len(data), radix, &mut powers).map_error(BigIntError.Allocation)?
         if negative:
             (-value).map_error(BigIntError.Allocation)
@@ -362,11 +362,10 @@ def digit_value(ch: u8) -> i64:
         else:
             -1
 
-# Each conversion shares the binary powers instead of squaring them again
-# at every recursive split and digit-count probe. The normalized divisors
-# are created lazily and belong to the same conversion.
+# Compute each exact power from its halved exponent. Normalized
+# divisors and their optional reciprocals belong to one conversion.
 class RadixPowers:
-    values: list[BigInt]
+    radix: i64
     exact: dict[i64, BigInt]
     prepared: Option[dict[i64, WideDivisor]]
 
@@ -375,7 +374,7 @@ class RadixPowers:
             self.compute(exponent)?
         Ok(self.exact.get_ref(exponent).unwrap())
 
-    def divide(self: &mut RadixPowers, value: &BigInt, exponent: i64) -> Result[(list[u64], list[u64]), AllocError]:
+    def divide(self: &mut RadixPowers, value: &BigInt, exponent: i64, reuse: bool) -> Result[(list[u64], list[u64]), AllocError]:
         if exponent not in self.exact:
             self.compute(exponent)?
         power = self.exact.get_ref(exponent).unwrap()
@@ -387,24 +386,24 @@ class RadixPowers:
             case Some(divisors):
                 if exponent not in divisors:
                     divisors.insert(exponent, prepare_wide_divisor(power)?)?
-                divide_wide(value, divisors.get_ref(exponent).unwrap())
+                divisor = divisors.get_mut(exponent).unwrap()
+                if reuse:
+                    divisor.prepare_radix_reciprocal(value.word_len())?
+                divide_wide(value, divisor, RADIX_DIVISION_BLOCK_LIMBS)
             case Nothing:
                 __trap("std.bigint: missing prepared divisor cache")
 
     def compute(self: &mut RadixPowers, exponent: i64) -> Result[(), AllocError]:
         unchecked:
-            mut result = from_i64(1)
-            mut count = exponent
-            mut index = 0
-            while count > 0:
-                if index == len(self.values):
-                    previous = &self.values[index - 1]
-                    square = (previous * previous)?
-                    self.values.append(square)?
-                if count % 2 != 0:
-                    result = (result * self.values[index])?
-                count //= 2
-                index += 1
+            if exponent <= 1:
+                self.exact.insert(exponent, from_i64(1 if exponent == 0 else self.radix))?
+                return Ok(())
+            half = self.power(exponent // 2)?
+            square = (half * half)?
+            result = if exponent % 2 == 0:
+                square
+            else:
+                (square * from_i64(self.radix))?
             self.exact.insert(exponent, result)?
             Ok(())
 
@@ -495,7 +494,7 @@ def render_large(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntEr
         upper_whole = (bits // chunk.log_floor) * chunk.width
         upper_fraction = ((bits % chunk.log_floor) * chunk.width + chunk.log_floor - 1) // chunk.log_floor
         upper = upper_whole + upper_fraction
-        mut powers = RadixPowers([from_i64(radix)].map_error(BigIntError.Allocation)?, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
+        mut powers = RadixPowers(radix, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
         if limit < upper:
             powers.compute(limit).map_error(BigIntError.Allocation)?
             boundary = powers.exact.get_ref(limit).unwrap()
@@ -507,7 +506,7 @@ def render_large(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntEr
         # Reserve a byte for an optional minus sign immediately before the
         # first significant digit, including when there is no leading padding.
         mut digits = [0u8 for _ in range(width + 1)].map_error(BigIntError.Allocation)?
-        render_digits(value, u64(radix), chunk, &mut digits[1:], &mut powers).map_error(BigIntError.Allocation)?
+        render_digits(value, u64(radix), chunk, &mut digits[1:], width // 2, False, &mut powers).map_error(BigIntError.Allocation)?
         # The magnitude is nonzero, so a significant digit ends this scan.
         mut first = 1
         while digits[first] == 48u8:
@@ -588,19 +587,21 @@ def divide_render_chunk(words: &mut [u64], chunk: RadixChunk) -> u64:
             remainder = rest
         remainder >> shift
 
-def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8], powers: &mut RadixPowers) -> Result[(), AllocError]:
+def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8], split: i64, reuse: bool, powers: &mut RadixPowers) -> Result[(), AllocError]:
     unchecked:
         if value.word_len() <= 1:
             render_word(value.word(0), radix, output)
             return Ok(())
         if value.word_len() <= 96:
             return render_chunks(value, radix, chunk, output)
-        middle = len(output) - len(output) // 2
-        (q, r) = powers.divide(value, len(output) - middle)?
+        # Use the same right-hand width at each depth so sibling splits
+        # share one power and reciprocal even when the widths are odd.
+        middle = len(output) - split
+        (q, r) = powers.divide(value, split, reuse)?
         left = canonical(False, q)
         right = canonical(False, r)
-        render_digits(&left, radix, chunk, &mut output[:middle], &mut powers)?
-        render_digits(&right, radix, chunk, &mut output[middle:], &mut powers)?
+        render_digits(&left, radix, chunk, &mut output[:middle], split // 2, True, &mut powers)?
+        render_digits(&right, radix, chunk, &mut output[middle:], split // 2, True, &mut powers)?
         Ok(())
 
 # Only this constructor can create a large representation. Zero has no sign;
@@ -889,19 +890,21 @@ def divide_words_three(value: &mut [u64]) -> ():
 # Full transforms have a power-of-two padding cost. Retain recursion in the
 # sparsely occupied band after each size jump, as well as for small/unbalanced
 # inputs. The retained capacity bound is within all five prime root orders.
+const MAX_TRANSFORM_WORDS: i64 = 524288
+
 def use_transform(a: i64, b: i64) -> bool:
     if a < 1024 or b < 1024:
         return False
-    if a > 524288 or b > 524288:
+    if a > MAX_TRANSFORM_WORDS or b > MAX_TRANSFORM_WORDS:
         return False
-    if a > 2 * b or b > 2 * a or a + b > 524288:
+    if a > 2 * b or b > 2 * a or a + b > MAX_TRANSFORM_WORDS:
         return False
     unchecked:
         digits = (a + 1) // 2 + (b + 1) // 2
         mut n = 1
         while n < digits:
             n *= 2
-        digits >= 7 * (n // 8)
+        digits >= 5 * (n // 8)
 
 def copy_words(source: &[u64], out: &mut [u64]) -> ():
     for i in range(len(out)):
@@ -911,9 +914,11 @@ def copy_words(source: &[u64], out: &mut [u64]) -> ():
 # generated Proth primes provide >299 coefficient bits; the common root
 # order exceeds the retained transform limit. Constants and certificates are
 # regenerated by experiments/bigint-comparison/algorithms-next/constants.py.
-def multiply_transform_wide_into(a: &[u64], b: &[u64], out: &mut [u64]) -> Result[(), AllocError]:
+# A cyclic product wraps at the power-of-two output length. Each packed
+# coefficient still has at most one term per point, so the CRT bound holds.
+def multiply_transform_wide_into(a: &[u64], b: &[u64], out: &mut [u64], cyclic: bool = False) -> Result[(), AllocError]:
     unchecked:
-        digits = (len(a) + 1) // 2 + (len(b) + 1) // 2
+        digits = len(out) // 2 if cyclic else (len(a) + 1) // 2 + (len(b) + 1) // 2
         mut n = 1
         while n < digits:
             n *= 2
@@ -933,18 +938,34 @@ def multiply_transform_wide_into(a: &[u64], b: &[u64], out: &mut [u64]) -> Resul
         transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152647726211530753u64, 3u64, 1152647726211530751u64, 4380454325059568u64, 726084339089016087u64, 915534325496093643u64)
         copy_words(&x, &mut residues3)
         transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152577357467353089u64, 7u64, 1152577357467353087u64, 5506354231902192u64, 1052221714738828282u64, 443901272462896093u64)
-        transform_wide_recover(&residues0, &residues1, &residues2, &residues3, &x, out)
+        (c0, c1, c2) = transform_wide_recover(&residues0, &residues1, &residues2, &residues3, &x, out)
+        if cyclic:
+            # B^len(out) is congruent to one. Fold the carry back into
+            # the low words and propagate an end-around carry if needed.
+            (w0, b0) = out[0].carrying_add(c0, False)
+            (w1, b1) = out[1].carrying_add(c1, b0)
+            (w2, b2) = out[2].carrying_add(c2, b1)
+            out[0] = w0
+            out[1] = w1
+            out[2] = w2
+            if b2 and increment_words(&mut out[3:]):
+                drop(increment_words(out))
         Ok(())
 
+# For a word below 2p, the high bit of word-p marks unsigned underflow.
+def reduce_transform_word(word: u64, p: u64) -> u64:
+    reduced = word.wrapping_sub(p)
+    reduced.wrapping_add(p & 0u64.wrapping_sub(reduced >> 63u64))
+
 # REDC with R=2^64. The caller supplies high<p, so T<p*R and the
-# unreduced result is below 2p < 2^61. The low word cancellation is exact.
+# unreduced result is below 2p < 2^61. The low words cancel modulo R
+# and their addition carries precisely when low is nonzero.
 def transform_wide_reduce(low: u64, high: u64, p: u64, inverse: u64) -> u64:
     unchecked:
         m = low.wrapping_mul(inverse)
-        (m_low, m_high) = m.widening_mul(p)
-        (_, carry) = low.carrying_add(m_low, False)
-        result = high + m_high + (1u64 if carry else 0u64)
-        result - p if result >= p else result
+        (_, m_high) = m.widening_mul(p)
+        carry = (low | 0u64.wrapping_sub(low)) >> 63u64
+        reduce_transform_word(high + m_high + carry, p)
 
 def transform_wide_multiply(a: u64, b: u64, p: u64, inverse: u64) -> u64:
     (low, high) = a.widening_mul(b)
@@ -1028,8 +1049,8 @@ def transform_wide_forward_block(low: &mut [u64], high: &mut [u64], roots: &[u64
             v = high[j]
             sum = u + v
             difference = u + p - v
-            low[j] = sum - p if sum >= p else sum
-            high[j] = transform_wide_multiply(difference - p if difference >= p else difference, roots[k], p, inverse)
+            low[j] = reduce_transform_word(sum, p)
+            high[j] = transform_wide_multiply(reduce_transform_word(difference, p), roots[k], p, inverse)
             k += step
 
 def transform_wide_inverse_block(low: &mut [u64], high: &mut [u64], roots: &[u64], step: i64, p: u64, inverse: u64) -> ():
@@ -1041,8 +1062,8 @@ def transform_wide_inverse_block(low: &mut [u64], high: &mut [u64], roots: &[u64
             v = transform_wide_multiply(high[j], root, p, inverse)
             sum = u + v
             difference = u + p - v
-            low[j] = sum - p if sum >= p else sum
-            high[j] = difference - p if difference >= p else difference
+            low[j] = reduce_transform_word(sum, p)
+            high[j] = reduce_transform_word(difference, p)
             k += step
 
 # Garner's mixed-radix conversion uses exact modular products. The fixed
@@ -1055,7 +1076,7 @@ def transform_garner_step(value: u64, digit: u64, reciprocal: u64, p: u64, inver
         product = transform_wide_multiply(difference, reciprocal, p, inverse)
         transform_wide_multiply(product, r2, p, inverse)
 
-def transform_wide_recover(a: &[u64], b: &[u64], c: &[u64], d: &[u64], e: &[u64], out: &mut [u64]) -> ():
+def transform_wide_recover(a: &[u64], b: &[u64], c: &[u64], d: &[u64], e: &[u64], out: &mut [u64]) -> (u64, u64, u64):
     unchecked:
         mut carry0 = 0u64
         mut carry1 = 0u64
@@ -1099,6 +1120,7 @@ def transform_wide_recover(a: &[u64], b: &[u64], c: &[u64], d: &[u64], e: &[u64]
             out[2 * i] = word0
             if 2 * i + 1 < len(out):
                 out[2 * i + 1] = word1
+        (carry0, carry1, carry2)
 
 def multiply_schoolbook(a: &[u64], b: &[u64], out: &mut [u64]) -> ():
     unchecked:
@@ -1107,10 +1129,13 @@ def multiply_schoolbook(a: &[u64], b: &[u64], out: &mut [u64]) -> ():
             mut carry = 0u64
             for j in range(len(b)):
                 (low, high) = x.widening_mul(b[j])
-                (sum, c1) = low.carrying_add(out[i + j], False)
-                (total, c2) = sum.carrying_add(carry, False)
+                previous = out[i + j]
+                sum = low.wrapping_add(previous)
+                total = sum.wrapping_add(carry)
                 out[i + j] = total
-                carry = high + (1u64 if c1 else 0u64) + (1u64 if c2 else 0u64)
+                # An addition carries when its wrapped sum is below its
+                # first operand. The second operand is their difference.
+                carry = high + borrow_bit(sum, low, previous) + borrow_bit(total, sum, carry)
             out[i + len(b)] = carry
 
 def quotient_remainder(a: &BigInt, b: &BigInt) -> Result[(BigInt, BigInt), AllocError]:
@@ -1173,6 +1198,11 @@ def scale32(digits: &mut list[u64], factor: u64) -> Result[(), AllocError]:
         Ok(())
 
 const WIDE_DIVISION_LIMBS: i64 = 2
+# Quotient-block sizes are measured in significant normalized limbs.
+const DIVISION_BLOCK_LIMBS: i64 = 768
+const RADIX_DIVISION_BLOCK_LIMBS: i64 = 1200
+const RADIX_RECIPROCAL_LIMBS: i64 = 2049
+const RECIPROCAL_TAIL_LIMBS: i64 = 768
 
 def divide_magnitude(a: &BigInt, b: &BigInt) -> Result[(list[u64], list[u64]), AllocError]:
     if b.word_len() >= WIDE_DIVISION_LIMBS and magnitude_cmp(a, b) >= 0:
@@ -1211,14 +1241,41 @@ def inverse_division_word(divisor: u64) -> u64:
         inverse = (inverse << 1u64) | (1u64 if subtract else 0u64)
     inverse
 
-# A prepared divisor can be reused for every split by the same radix power.
-# The omitted low limbs are zero in the divisor, so the corresponding low
-# numerator limbs pass directly to the remainder.
+# The leading one of the fixed-point reciprocal is implicit. The
+# cyclic correction product uses modulus B^cyclic_words - 1.
+class RadixReciprocal:
+    digits: list[u64]
+    cyclic_words: i64
+
+# The omitted low limbs are zero in the divisor, so the corresponding
+# low dividend limbs pass directly to the remainder.
 class WideDivisor:
     first: i64
     shift: u64
     digits: list[u64]
     inverse: u64
+    reciprocal: Option[RadixReciprocal]
+
+    def prepare_radix_reciprocal(self: &mut WideDivisor, dividend_limbs: i64) -> Result[(), AllocError]:
+        unchecked:
+            n = len(self.digits)
+            if n < RADIX_RECIPROCAL_LIMBS or self.reciprocal.is_some() or n >= MAX_TRANSFORM_WORDS:
+                return Ok(())
+            quotient_limbs = dividend_limbs - self.first - n
+            # The cyclic reciprocal path pays for itself on repeated
+            # splits whose quotient is wider after low zero limbs are
+            # omitted. Divide the quotient into roughly equal blocks.
+            if quotient_limbs <= n + n // 4:
+                return Ok(())
+            half_cyclic = power_of_two_at_most(n)
+            cyclic = 2 * half_cyclic
+            target = (quotient_limbs + 1) // 2
+            block = half_cyclic if half_cyclic > target else target
+            width = block if block < n else n - 1
+            if n + width > cyclic and quotient_limbs >= width:
+                digits = division_reciprocal(&self.digits, width)?
+                self.reciprocal = Some(RadixReciprocal(digits, cyclic))
+            Ok(())
 
 def prepare_wide_divisor(value: &BigInt) -> Result[WideDivisor, AllocError]:
     unchecked:
@@ -1228,16 +1285,20 @@ def prepare_wide_divisor(value: &BigInt) -> Result[WideDivisor, AllocError]:
         shift = u64((64 - value.bit_length() % 64) % 64)
         digits = normalize_division(value, first, shift, 0)?
         inverse = inverse_division_word(digits[-1])
-        Ok(WideDivisor(first, shift, digits, inverse))
+        Ok(WideDivisor(first, shift, digits, inverse, Nothing))
 
-def divide_wide(a: &BigInt, b: &WideDivisor) -> Result[(list[u64], list[u64]), AllocError]:
+def divide_wide(a: &BigInt, b: &WideDivisor, block_limbs: i64 = DIVISION_BLOCK_LIMBS) -> Result[(list[u64], list[u64]), AllocError]:
     unchecked:
         first = b.first
         shift = b.shift
         n = len(b.digits)
         mut u = normalize_division(a, first, shift, 1)?
         mut q = zeros(len(u) - n)?
-        divide_wide_digits(&mut u, &b.digits, &mut q, b.inverse)
+        match &b.reciprocal:
+            case Some(reciprocal):
+                divide_reciprocal_digits(&mut u, &b.digits, &mut q, b.inverse, reciprocal)?
+            case Nothing:
+                divide_normalized(&mut u, &b.digits, &mut q, b.inverse, block_limbs)?
         mut r = zeros(first + n)?
         for i in range(first):
             r[i] = a.word(i)
@@ -1267,6 +1328,184 @@ def estimate_division_word(hi: u64, lo: u64, d: u64, inverse: u64) -> (u64, u64)
         (q.wrapping_add(1u64), r.wrapping_sub(d))
     else:
         (q, r)
+
+def divide_normalized(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64, block_limbs: i64) -> Result[(), AllocError]:
+    unchecked:
+        n = len(v)
+        high = len(q) - 1
+        if n < 2 * block_limbs or high < block_limbs or high < n // 2:
+            divide_wide_digits(u, v, q, inverse)
+            return Ok(())
+        # The extra dividend limb may be nonzero after normalization.
+        # Resolve the top quotient limb to make the n-limb remainder < v.
+        divide_wide_digits(&mut u[high:], v, &mut q[high:], inverse)
+        mut scratch = zeros(n)?
+        divide_blocked_digits(&mut u[:high + n], v, &mut q[:high], inverse, &mut scratch)
+
+# Divide successive quotient blocks from most significant to least. The
+# low half omitted by the recursive estimate is restored by multiplication.
+def divide_blocked_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64, scratch: &mut [u64]) -> Result[(), AllocError]:
+    unchecked:
+        n = len(v)
+        mut high = len(q)
+        while high > 0:
+            if n < 2 * DIVISION_BLOCK_LIMBS or high < DIVISION_BLOCK_LIMBS:
+                divide_wide_digits(&mut u[:n + high], v, &mut q[:high], inverse)
+                return Ok(())
+            half = (n + 1) // 2
+            k = half if half < high else high
+            offset = high - k
+            first = n - k
+            start = offset + first
+            top = &v[first:]
+            mut carry = False
+            if compare_division_words(&u[high + first:high + n], top) == 0:
+                # The true quotient fits k limbs. Clamp its estimate to
+                # B^k-1; the truncated remainder is the low k limbs plus top.
+                for i in range(k):
+                    q[offset + i] = u64.MAX
+                carry = add_division_words(&mut u[start:start + k], top)
+            else:
+                divide_blocked_digits(&mut u[start:high + n], top, &mut q[offset:high], inverse, scratch)?
+            product = &mut scratch[:n]
+            clear_words(product)
+            multiply_into(&q[offset:high], &v[:first], product)?
+            # Only the clamped prefix remainder can have an extra limb.
+            # A negative difference needs at most two additions of v.
+            row = &mut u[offset:offset + n]
+            borrow = subtract_division_words(row, product)
+            mut negative = not carry and borrow != 0u64
+            while negative:
+                decrement_words(&mut q[offset:high])
+                negative = not add_division_words(row, v)
+            high = offset
+        Ok(())
+
+def compare_division_words(a: &[u64], b: &[u64]) -> i64:
+    unchecked:
+        mut i = len(b)
+        while i > 0:
+            i -= 1
+            if a[i] != b[i]:
+                return -1 if a[i] < b[i] else 1
+        0
+
+def clear_words(words: &mut [u64]) -> ():
+    for word in words:
+        *word = 0u64
+
+def decrement_words(words: &mut [u64]) -> ():
+    for word in words:
+        *word = (*word).wrapping_sub(1u64)
+        if *word != u64.MAX:
+            break
+
+def increment_words(words: &mut [u64]) -> bool:
+    for word in words:
+        *word = (*word).wrapping_add(1u64)
+        if *word != 0u64:
+            return False
+    True
+
+def add_division_words(row: &mut [u64], words: &[u64]) -> bool:
+    mut carry = False
+    for i in range(len(row)):
+        (sum, overflow) = row[i].carrying_add(words[i], carry)
+        row[i] = sum
+        carry = overflow
+    carry
+
+def subtract_division_words(row: &mut [u64], words: &[u64]) -> u64:
+    mut borrow = 0u64
+    for i in range(len(row)):
+        a = row[i]
+        b = words[i]
+        partial = a.wrapping_sub(b)
+        difference = partial.wrapping_sub(borrow)
+        row[i] = difference
+        borrow = borrow_bit(a, b, partial) | borrow_bit(partial, borrow, difference)
+    borrow
+
+def power_of_two_at_most(n: i64) -> i64:
+    unchecked:
+        mut k = 1
+        while k <= n // 2:
+            k *= 2
+        k
+
+# Divide by the rounded-up k+1 limb prefix and discard one guard limb.
+# This gives a lower bound on B^(n+k)/v with error less than two.
+def division_reciprocal(v: &[u64], k: i64) -> Result[list[u64], AllocError]:
+    unchecked:
+        width = k + 1
+        mut prefix = v[len(v) - width:]?
+        if increment_words(&mut prefix):
+            return zeros(k)
+        mut numerator = [u64.MAX for _ in range(2 * width)]?
+        mut full = zeros(width)?
+        mut scratch = zeros(width)?
+        # The upper width limbs of B^(2*width)-1 are at least the prefix.
+        # The implicit high quotient limb is therefore one.
+        drop(subtract_division_words(&mut numerator[width:], &prefix))
+        divide_blocked_digits(&mut numerator, &prefix, &mut full, inverse_division_word(prefix[-1]), &mut scratch)?
+        Ok(full[1:]?)
+
+# Evaluate the correction modulo B^width-1 with a cyclic convolution.
+# The actual nonnegative remainder is smaller than 5v, which fits below
+# the modulus since width is at least one limb longer than the divisor.
+def subtract_cyclic_product(u: &mut [u64], v: &[u64], q: &[u64], product: &mut [u64], folded: &mut [u64]) -> Result[u64, AllocError]:
+    unchecked:
+        width = len(product)
+        multiply_transform_wide_into(v, q, product, True)?
+        copy_words(&u[:width], folded)
+        high = len(u) - width
+        if add_division_words(&mut folded[:high], &u[width:]) and increment_words(&mut folded[high:]):
+            drop(increment_words(folded))
+        if subtract_division_words(folded, product) != 0u64:
+            decrement_words(folded)
+        n = len(v)
+        if folded[n] == u64.MAX:
+            clear_words(&mut u[:n])
+            return Ok(0u64)
+        copy_words(folded, &mut u[:n])
+        Ok(folded[n])
+
+# H is the high k limbs of the current remainder. The next quotient
+# block is at least floor(H * (B^k + reciprocal) / B^k). Subtract its
+# product with the divisor and advance the estimate until the remainder
+# is smaller than the divisor.
+def divide_reciprocal_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64, reciprocal: &RadixReciprocal) -> Result[(), AllocError]:
+    unchecked:
+        n = len(v)
+        width = len(reciprocal.digits)
+        cyclic = reciprocal.cyclic_words
+        mut high = len(q) - 1
+        if high < RECIPROCAL_TAIL_LIMBS or n + high <= cyclic:
+            return divide_normalized(u, v, q, inverse, RADIX_DIVISION_BLOCK_LIMBS)
+        divide_wide_digits(&mut u[high:], v, &mut q[high:], inverse)
+        product_size = 2 * width if 2 * width > cyclic else cyclic
+        mut scratch = zeros(product_size)?
+        mut folded = zeros(cyclic)?
+        while high > 0:
+            k = width if width < high else high
+            if k < RECIPROCAL_TAIL_LIMBS or n + k <= cyclic:
+                divide_wide_digits(&mut u[:n + high], v, &mut q[:high], inverse)
+                break
+            offset = high - k
+            top = &u[high + n - k:high + n]
+            product = &mut scratch[:2 * k]
+            clear_words(product)
+            multiply_into(top, &reciprocal.digits[width - k:], product)?
+            quotient = &mut q[offset:high]
+            copy_words(top, quotient)
+            drop(add_division_words(quotient, &product[k:]))
+            mut upper = subtract_cyclic_product(&mut u[offset:high + n], v, quotient, &mut scratch[:cyclic], &mut folded)?
+            row = &mut u[offset:offset + n]
+            while upper != 0u64 or compare_division_words(row, v) >= 0:
+                drop(increment_words(quotient))
+                upper = upper.wrapping_sub(subtract_division_words(row, v))
+            high = offset
+        Ok(())
 
 def divide_wide_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64) -> ():
     unchecked:
