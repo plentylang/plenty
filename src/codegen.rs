@@ -1401,7 +1401,7 @@ struct Runtime {
     sort_adapters: HashMap<String, FuncId>,
     /// Formatting adapters, by type and whether they call `display` rather
     /// than `debug`; the type metadata links them.
-    format_hooks: HashMap<(Ty, bool), FuncId>,
+    format_hooks: HashMap<(Ty, crate::collection::HookMode), FuncId>,
     channel: FuncId,
     control: FuncId,
     executor: FuncId,

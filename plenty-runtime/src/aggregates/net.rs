@@ -648,6 +648,7 @@ mod native {
             transparent: false,
             debug: None,
             display: None,
+            selected_debug: None,
             quantity: None,
             finite: None,
             destroy: None,

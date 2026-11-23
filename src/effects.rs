@@ -183,6 +183,7 @@ impl CollectionOp {
             | ParseNumber(_)
             | FormatScalar(_)
             | FormatValue(_)
+            | FieldRepr(_)
             | ListUnpack(_)
             | ElementRef(..)
             | TryCopy(_)

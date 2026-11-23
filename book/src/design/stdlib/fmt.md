@@ -264,15 +264,22 @@ supported x86-64 Linux GNU target and adds no external library dependency.
 
 The destination writer and its own scratch keep their original policies. Width and precision count the rendered spelling's Unicode scalars, not its bytes. Precision can hide most of a spelling, but cannot prevent the method from running or cap its temporary storage. The private formatter has the ordinary field depth of 32; the destination byte limit applies to the eventual output, not to staging. Refusal returns `FormatError.Allocation(cause)` without fallback. A staging or hook error leaves earlier fields intact and emits none of the failed field; an output error can leave part of its padding or body in `out.completed()`.
 
-`format_in` does not change allocations made by the hook's own code, including its own ordinary f-strings. It also accepts fields that need no separate collector (for example, plain integers and text). Spellings that would still need an unsupported ordinary temporary, such as structural fields containing nested debug hooks, are rejected. Ordinary `out.format` and standalone f-strings keep their existing storage policy.
+`format_in` does not change allocations made by the hook's own code, including its own ordinary f-strings. It also accepts fields that need no separate collector (for example, plain integers and text). Other spellings that would still need an unsupported ordinary temporary, such as `!a` on a plain integer, are rejected. Ordinary `out.format` and standalone f-strings keep their existing storage policy.
 
 ## Select structural field scratch
 
 `output.format_in(&scratch, f"{rows}")` selects the temporary storage used to
-spell a field. A list, tuple or other hook-free structural value is rendered
+spell a field. A list, tuple or other structural value is rendered
 in one pass to a growable byte buffer, including nested values and quoted
 strings. Both that buffer and any non-inline temporary text use `scratch`.
-The formatter and writer keep their own storage policies. No allocator is
+Hook selection is the same as for ordinary fields: for example, a list looks
+for element `debug` methods, but a fixed array does not initiate hook discovery
+for its elements. Each rendered occurrence of a selected hook runs once, in
+traversal order, with a private formatter of depth 32. Its buffers and finished
+spelling use `scratch`; allocations the method itself requests do not change.
+Padding, precision and `!a` operate on the completed spelling without calling
+any method again. A hook error stops the walk before any of this field is sent.
+The destination formatter and writer keep their own storage policies. No allocator is
 inferred from an input or used as a backup on refusal.
 
 Even an inline spelling such as `[]` needs render scratch. An allocation

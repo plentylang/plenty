@@ -3,6 +3,7 @@
 # Explicit allocator passing is modelled on Zig (https://ziglang.org/).
 # No Zig code is included.
 from std.bytes import Bytes, BytesError
+from std.fmt import FormatError
 
 @thread_shareable
 opaque Handle
@@ -434,9 +435,9 @@ pub def allocator[P: Provider](bootstrap: &Allocator, provider: P) -> Result[All
                 return Err(RegistrationError[P].UnsupportedContext(state))
             __trap("invalid allocator registration status")
 
-# Compiler-generated fields call these only after ruling out formatting hooks.
-def _field_repr[T](scratch: &Allocator, value: &T) -> Result[str, AllocError]:
-    __allocator_field_repr[T](scratch._handle, value)
+# The native walk uses the handle; nested debug adapters borrow the same allocator.
+def _field_repr[T](scratch: &Allocator, value: &T) -> Result[str, AllocError | FormatError]:
+    Ok(__allocator_field_repr[T](scratch._handle, value, scratch)?)
 
-def _view_field_repr[T](scratch: &Allocator, value: &[T]) -> Result[str, AllocError]:
-    __allocator_view_field_repr[T](scratch._handle, value)
+def _view_field_repr[T](scratch: &Allocator, value: &[T]) -> Result[str, AllocError | FormatError]:
+    Ok(__allocator_view_field_repr[T](scratch._handle, value, scratch)?)

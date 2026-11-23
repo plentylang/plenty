@@ -11,10 +11,7 @@ impl Lower<'_> {
         ops: &mut Vec<Op>,
     ) -> Result<Type> {
         use crate::collection_opcodes as code;
-        let handle = Ty::ForeignPtr(
-            "std.alloc.Handle".into(),
-            crate::foreign::Threads::Shareable,
-        );
+        let handle = crate::collection::allocator_handle();
         let storage = Ty::Array(Arc::new(Ty::U64), 3);
         let shared = Ty::Ref(Arc::new(storage.clone()), false);
         let exclusive = Ty::Ref(Arc::new(storage.clone()), true);
@@ -198,12 +195,29 @@ impl Lower<'_> {
                 if let Some(message) = collections::repr_rejection(&descriptor) {
                     return Err(at.error(message));
                 }
-                (
-                    code::ALLOCATOR_FIELD_REPR,
-                    vec![handle, source],
-                    Some(crate::sum::result(Ty::Str, crate::sum::alloc_error())),
-                    Some(descriptor),
-                )
+                let [policy, value, scratch] = args else {
+                    return Err(at.error(
+                        "allocator field representation requires handle, value and allocator",
+                    ));
+                };
+                let actual = self.value(policy, ops)?;
+                self.same(Some(actual), Some(handle), at)?;
+                let actual = self.value(value, ops)?;
+                self.same(Some(actual), Some(source.clone()), at)?;
+                let allocator = self.value(scratch, ops)?;
+                if !matches!(&allocator, Ty::Ref(t, false) if matches!(&**t, Ty::Class(c) if c.name.as_ref() == "std.alloc.Allocator"))
+                {
+                    return Err(at.error("field scratch must be an allocator reference"));
+                }
+                let op = CollectionOp::FieldRepr(Arc::new(crate::collection::FieldSpelling {
+                    allocator,
+                    source,
+                }));
+                let op = self.formatted(op, &[descriptor], false, at)?;
+                let output = op.signature().1;
+                ops.push(Op::Thread(crate::threading::ThreadOp::AllocatorUse));
+                ops.push(Op::Collection(op));
+                return Ok(Some(output));
             }
             "__allocator_text_quote" => (
                 code::ALLOCATOR_TEXT_QUOTE,

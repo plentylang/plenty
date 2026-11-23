@@ -121,6 +121,16 @@ pub enum Intrinsic {
 
 /// The emitted std allocator primitive (not a function name or a source import).
 pub(crate) fn allocator_opcode(op: &crate::op::Op) -> Option<i64> {
+    use crate::collection::CollectionOp;
+    if let crate::op::Op::Collection(op) = op {
+        let op = match op {
+            CollectionOp::Formatted(f) => &f.operation,
+            other => other,
+        };
+        if matches!(op, CollectionOp::FieldRepr(_)) {
+            return Some(crate::collection_opcodes::ALLOCATOR_FIELD_REPR);
+        }
+    }
     if let crate::op::Op::ForeignCall { declaration, .. } = op
         && let Target::Intrinsic(intrinsic) = &declaration.target
         && let Intrinsic::Allocator { opcode, .. } = **intrinsic

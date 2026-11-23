@@ -1524,6 +1524,7 @@ impl Lower<'_> {
         ty: &Ty,
         display: bool,
         top: bool,
+        allocator: Option<&Ty>,
         at: &Token,
     ) -> Result<crate::collection::FormatHook> {
         let method = if display { "display" } else { "debug" };
@@ -1540,11 +1541,26 @@ impl Lower<'_> {
             Some(template) if !top => template.at.clone(),
             _ => at.clone(),
         };
-        let caller = self.method_caller(method, HookOutput::String, &site)?;
-        let function = self.specialize(&caller, vec![Argument::Type(ty.clone())], &site)?;
+        use crate::collection::HookMode;
+        let mut types = vec![Argument::Type(ty.clone())];
+        let (output, mode) = if let Some(allocator) = allocator {
+            types.push(Argument::Type(allocator.clone()));
+            (HookOutput::SelectedString, HookMode::SelectedDebug)
+        } else {
+            (
+                HookOutput::String,
+                if display {
+                    HookMode::Display
+                } else {
+                    HookMode::Debug
+                },
+            )
+        };
+        let caller = self.method_caller(method, output, &site)?;
+        let function = self.specialize(&caller, types, &site)?;
         Ok(crate::collection::FormatHook {
             ty: ty.clone(),
-            display,
+            mode,
             function,
         })
     }
@@ -1602,9 +1618,13 @@ impl Lower<'_> {
             }
         }
         let tops: Vec<&Ty> = types.iter().map(referent).collect();
+        let allocator = match &operation {
+            CollectionOp::FieldRepr(field) => Some(referent(&field.allocator)),
+            _ => None,
+        };
         let hooks = hooked
             .iter()
-            .map(|(ty, display)| self.format_hook(ty, *display, tops.contains(&ty), at))
+            .map(|(ty, display)| self.format_hook(ty, *display, tops.contains(&ty), allocator, at))
             .collect::<Result<Vec<_>>>()?;
         if hooks.is_empty() {
             return Ok(operation);
@@ -1766,14 +1786,14 @@ impl Lower<'_> {
         };
         // Finish structural rendering before writing any of the field. Keep the
         // outer text/ascii/layout operations (and their progress) unchanged.
-        if selected && matches!(category, Category::Repr) && !hooked && ty != text_view() {
+        if selected && matches!(category, Category::Repr) && ty != text_view() {
             let function = if matches!(ty, Ty::View(..)) {
                 "std.alloc._view_field_repr"
             } else {
                 "std.alloc._field_repr"
             };
             let repr = temporary(
-                "field_spelling",
+                "repr_result",
                 vec![call(at, function, vec![name(at, SCRATCH), value])],
             );
             let ascii = field.conversion == Conversion::Ascii;

@@ -58,7 +58,7 @@ pub const ALLOCATOR_TEXT_SPLITLINES: i64 = 679;
 pub const ALLOCATOR_TEXT_QUOTE: i64 = 680;
 /// Consume dictionary values into a selected list; descriptor is list[V].
 pub const ALLOCATOR_INTO_VALUES: i64 = 681;
-/// Handle and borrowed packed value; descriptor is the hook-free field type.
+/// Handle, borrowed field (reference or view), allocator reference, optional hook error cell.
 /// Both the render buffer and any non-inline temporary text use this handle.
 pub const ALLOCATOR_FIELD_REPR: i64 = 682;
 
@@ -156,7 +156,7 @@ pub const fn scratch_operand_count(op: i64) -> usize {
     match op {
         // Float formatting; datagram receive.
         281 | 417 => 2,
-        DICT_LAZY_FINISH | ALLOCATOR_BLOCK | ALLOCATOR_REGISTER | ALLOCATOR_TEXT_REPLACE => 1,
+        DICT_LAZY_FINISH | ALLOCATOR_BLOCK | ALLOCATOR_REGISTER | ALLOCATOR_TEXT_REPLACE | ALLOCATOR_FIELD_REPR => 1,
         // Slices: receiver, start, stop, step and the bound flags.
         LIST_SLICE | TEXT_SLICE | BYTES_SLICE | CLIST_SLICE => 2,
         ALLOCATOR_LIST_SLICE | ALLOCATOR_BYTES_SLICE | ALLOCATOR_TEXT_SLICE | ALLOCATOR_CLIST_SLICE => 2,

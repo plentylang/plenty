@@ -24,7 +24,7 @@ count=  12, label="one\ntwo"
 ```
 
 To choose storage, pass an allocator when constructing the formatter and again
-when finishing. For a structural field or padded user hook, `format_in` selects temporary storage without changing the writer. The hook still runs only once. Here we reuse one allocator for all three roles.
+when finishing. For a structural field or padded user hook, `format_in` selects temporary storage without changing the writer. Each nested `debug` runs once, even when padding needs its length. Here we reuse one allocator for all three roles.
 
 ```plenty
 import std.alloc as alloc
@@ -36,12 +36,15 @@ class Status:
     def display[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
         out.text(&self.name)
 
+    def debug[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        out.debug_text(&self.name)
+
 def main() -> Result[(), fmt.FormatError | AllocError | IoError]:
     storage = alloc.system()
     mut output = fmt.string_formatter_in(&storage, 80, 8)?
     label = Status("ready")
-    rows = [("ready", 2)]?
-    output.format_in(&storage, f"label={label:>7} rows={rows}")?
+    rows = [Status("ready"), Status("idle")]?
+    output.format_in(&storage, f"label={label:>7} rows={rows:>20}")?
     message = fmt.finish_in(&storage, &output)?
     drop(output)
     print(message)?
@@ -49,7 +52,7 @@ def main() -> Result[(), fmt.FormatError | AllocError | IoError]:
 ```
 
 ```output
-label=  ready rows=[("ready", 2)]
+label=  ready rows=   ["ready", "idle"]
 ```
 
 Your type chooses separate display and debug methods. Both can be generic over

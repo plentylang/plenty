@@ -1066,10 +1066,7 @@ impl Lowerer<'_, '_> {
         }
         if let CollectionOp::ListSortBy(sort) = operation {
             let workspace = if sort.selected_workspace {
-                Some(
-                    self.pop_typed(crate::collection::KeySort::workspace_handle())?
-                        .0,
-                )
+                Some(self.pop_typed(crate::collection::allocator_handle())?.0)
             } else {
                 None
             };
@@ -1462,6 +1459,7 @@ impl Lowerer<'_, '_> {
             | CollectionOp::ReadBytes
             | CollectionOp::OpenFile
             | CollectionOp::FileReadLines => Some(&output),
+            CollectionOp::FieldRepr(field) => Some(&field.source),
             CollectionOp::ParseNumber(ty)
             | CollectionOp::FormatScalar(ty)
             | CollectionOp::FormatValue(ty)
@@ -1527,6 +1525,9 @@ impl Lowerer<'_, '_> {
             None
         };
         arguments.extend(cell);
+        if matches!(operation, CollectionOp::FieldRepr(_)) && cell.is_none() {
+            arguments.push(self.bcx.ins().iconst(PTR_TY, 0));
+        }
         let result = if let CollectionOp::DictGetOrInsert(_) = operation {
             // A str key with a value that a hit need not drop takes the
             // helper whose inline-key hit is a leaf.

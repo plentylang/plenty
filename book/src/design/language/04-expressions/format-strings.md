@@ -235,7 +235,8 @@ to select storage for that spelling without changing the destination. Both
 forms require literal templates; a user type's methods are unaffected.
 
 Use `out.format_in(&scratch, f"{rows}")` to [select structural field scratch](../../stdlib/fmt.md#select-structural-field-scratch).
-It borrows the allocator for the literal; allocator refusal is a formatting
+Nested `debug` methods run once per rendered occurrence into private formatters
+using the same field allocator. It is borrowed for the literal; refusal is a formatting
 error, not a request to retry with ordinary storage.
 
 ## Cost and failure

@@ -5,7 +5,7 @@
 //! address of one of these adapters, which receives a reference to the value
 //! and a cell for the method's `Result[str, FormatError]`.
 use super::*;
-use crate::collection::{CollectionOp, FormatHook};
+use crate::collection::{CollectionOp, FormatHook, HookMode};
 
 /// Declare one adapter per hook function, in name order, and record the
 /// first for each type and method in `hooks`, where the metadata finds it.
@@ -18,7 +18,7 @@ pub(super) fn declare_adapters(
     ops: &[Op],
     workers: usize,
     module: &mut ObjectModule,
-    hooks: &mut HashMap<(Ty, bool), FuncId>,
+    hooks: &mut HashMap<(Ty, HookMode), FuncId>,
 ) -> Result<Vec<(FormatHook, FuncId)>> {
     let found: std::collections::BTreeMap<_, _> =
         crate::threading::find(ops, workers, |op| match op {
@@ -36,19 +36,25 @@ pub(super) fn declare_adapters(
         .collect();
     let mut declared = Vec::new();
     for (name, hook) in found {
-        let id =
-            module.declare_function(&name, Linkage::Local, &signature(module.make_signature()))?;
-        hooks.entry((hook.ty.clone(), hook.display)).or_insert(id);
+        let id = module.declare_function(
+            &name,
+            Linkage::Local,
+            &signature(module.make_signature(), hook.mode),
+        )?;
+        hooks.entry((hook.ty.clone(), hook.mode)).or_insert(id);
         declared.push((hook, id));
     }
     Ok(declared)
 }
 
-/// Value reference, result cell -> nothing.
-fn signature(mut signature: Signature) -> Signature {
+/// Value reference, result cell, optional field allocator reference -> nothing.
+fn signature(mut signature: Signature, mode: HookMode) -> Signature {
     signature
         .params
         .extend([AbiParam::new(PTR_TY), AbiParam::new(PTR_TY)]);
+    if mode == HookMode::SelectedDebug {
+        signature.params.push(AbiParam::new(PTR_TY));
+    }
     signature
 }
 
@@ -61,7 +67,7 @@ pub(super) fn build_adapter(
     out: &mut Worker,
 ) -> Result<()> {
     let mut module = out.symbols();
-    let signature = signature(module.make_signature());
+    let signature = signature(module.make_signature(), hook.mode);
     let mut func = Function::with_name_signature(UserFuncName::user(0, id.as_u32()), signature);
     let mut bcx = FunctionBuilder::new(&mut func, &mut out.builder);
     let entry = bcx.create_block();
@@ -104,6 +110,12 @@ pub(super) fn build_adapter(
     lower
         .stack
         .push((reference, Ty::Ref(Arc::new(hook.ty.clone()), false)));
+    if hook.mode == HookMode::SelectedDebug {
+        let allocator = lower.bcx.ins().uextend(types::I128, params[2]);
+        lower
+            .stack
+            .push((allocator, functions[&hook.function].sig.inputs[1].1.clone()));
+    }
     // The hook builds its own formatter with the f-string limits
     // (`frontend::fstrings::method_function`).
     lower.lower_call(&hook.function)?;

@@ -104,14 +104,15 @@ fn define_type(
 ) -> Result<()> {
     let id = runtime.type_data.lock().unwrap()[ty];
     // Mirrors plenty_runtime::aggregates::{Type, Variant} on the 64-bit host.
-    let mut bytes = vec![0; 144];
+    let mut bytes = vec![0; 152];
     let finite = finite::emit(module, ty)?;
     // The formatting adapters belong to the type as written: a newtype's
     // methods are its own, not its field's.
-    let formats: Vec<(u32, FuncId)> = [(88, false), (96, true)]
+    use crate::collection::HookMode::*;
+    let formats: Vec<(u32, FuncId)> = [(88, Debug), (96, Display), (144, SelectedDebug)]
         .into_iter()
-        .filter_map(|(offset, display)| {
-            let hook = runtime.format_hooks.get(&(ty.clone(), display))?;
+        .filter_map(|(offset, mode)| {
+            let hook = runtime.format_hooks.get(&(ty.clone(), mode))?;
             Some((offset, *hook))
         })
         .collect();
