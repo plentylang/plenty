@@ -258,6 +258,14 @@ supported x86-64 Linux GNU target and adds no external library dependency.
 
 `string_formatter_in(&buffers, max_bytes, max_depth)` creates a collected formatter whose scratch and cursor grow through `buffers`. `finish_in(&result_allocator, &formatter)` borrows the cursor and copies valid UTF-8 into inline or selected text. The allocators may differ. Refusal returns `FormatError.Allocation`; a failed finish leaves the formatter usable. As with `finish`, manually inserting invalid UTF-8 into the public cursor is a programmer error. These choices do not redirect allocations inside user methods or `represent`.
 
+## Select scratch for a user formatting method
+
+`out.format_in(&scratch, f"{value:>12}")` borrows a field allocator once for the literal. When layout needs a top-level `display` or `debug` spelling, a private formatter uses `scratch` for its byte buffers and non-inline text. It calls the method **once**, not once to measure and again to write. For `!a`, the debug spelling is escaped before layout; `ascii_string_in(&scratch, value)` also collects this escaped text directly with selected buffers and result storage. Without a spec or `!a`, a user method writes directly to `out` and needs no field collector.
+
+The destination writer and its own scratch keep their original policies. Width and precision count the rendered spelling's Unicode scalars, not its bytes. Precision can hide most of a spelling, but cannot prevent the method from running or cap its temporary storage. The private formatter has the ordinary field depth of 32; the destination byte limit applies to the eventual output, not to staging. Refusal returns `FormatError.Allocation(cause)` without fallback. A staging or hook error leaves earlier fields intact and emits none of the failed field; an output error can leave part of its padding or body in `out.completed()`.
+
+`format_in` does not change allocations made by the hook's own code, including its own ordinary f-strings. It also accepts fields that need no separate collector (for example, plain integers and text). Spellings that would still need an unsupported ordinary temporary, including aggregate representation, are rejected. Ordinary `out.format` and standalone f-strings keep their existing storage policy.
+
 ## Acknowledgements
 
 - Format specs follow [Python's format specification mini-language](https://docs.python.org/3/library/string.html#formatspec).
