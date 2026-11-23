@@ -5,8 +5,8 @@
 # Large multiplication independently implements small-prime NTT/CRT, with
 # 128-bit digit packing and exact Montgomery reduction:
 # https://flintlib.org/doc/algorithms/fft/multimodular.html
-# Malachite 0.14 informed word-sized digit groups, recursive quotient
-# blocks and cached Barrett reciprocals with cyclic correction products.
+# Malachite 0.14 informed grouped conversion, bit packing, radix-power squaring,
+# recursive quotient blocks and cached Barrett reciprocals with cyclic products.
 # No third-party code or data is included.
 from std.bytes import to_text, BytesError
 from std.fmt import Formatter, FormatError
@@ -319,10 +319,7 @@ pub def from_i64(value: i64) -> BigInt:
     BigInt(Value.Small(value))
 
 pub def from_u64(value: u64) -> Result[BigInt, AllocError]:
-    if value <= 9223372036854775807u64:
-        unchecked:
-            return Ok(from_i64(i64(value)))
-    Ok(canonical(False, [value]?))
+    signed_word(False, value)
 
 pub def parse(text: &strview, radix: i64 = 10, max_digits: NonNegative[i64] = 10000) -> Result[BigInt, BigIntError]:
     if radix < 2 or radix > 36:
@@ -337,19 +334,30 @@ pub def parse(text: &strview, radix: i64 = 10, max_digits: NonNegative[i64] = 10
             return Err(BigIntError.LimitExceeded)
         if start == len(data):
             return Err(BigIntError.InvalidDigit)
-        for i in range(start, len(data)):
-            digit = digit_value(data[i])
-            if digit < 0 or digit >= radix:
-                return Err(BigIntError.InvalidDigit)
-        value = if len(data) - start <= 12:
-            parse_small(data, start, len(data), radix)
+        if radix <= 10:
+            for byte in &data[start:]:
+                if byte.wrapping_sub(48u8) >= u8(radix):
+                    return Err(BigIntError.InvalidDigit)
         else:
-            mut powers = RadixPowers(radix, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
-            parse_digits(data, start, len(data), radix, &mut powers).map_error(BigIntError.Allocation)?
-        if negative:
-            (-value).map_error(BigIntError.Allocation)
-        else:
-            Ok(value)
+            for byte in &data[start:]:
+                digit = digit_value(*byte)
+                if digit < 0 or digit >= radix:
+                    return Err(BigIntError.InvalidDigit)
+        mut first = start
+        while first < len(data) and data[first] == 48u8:
+            first += 1
+        digits = &data[first:]
+        if len(digits) <= 12:
+            word = i64(parse_word(digits, u64(radix)))
+            return Ok(from_i64(-word if negative else word))
+        if radix & (radix - 1) == 0:
+            return parse_power_of_two(digits, u64(radix), negative).map_error(BigIntError.Allocation)
+        (width, factor) = radix_group(u64(radix))
+        if len(digits) <= width:
+            return signed_word(negative, parse_word(digits, u64(radix))).map_error(BigIntError.Allocation)
+        mut powers = RadixPowers(radix, dict[i64, BigInt]().map_error(BigIntError.Allocation)?, Nothing)
+        limbs = parse_digits(digits, len(digits) // 2, u64(radix), width, factor, &mut powers).map_error(BigIntError.Allocation)?
+        Ok(canonical(negative, limbs))
 
 def digit_value(ch: u8) -> i64:
     unchecked:
@@ -398,32 +406,182 @@ class RadixPowers:
             if exponent <= 1:
                 self.exact.insert(exponent, from_i64(1 if exponent == 0 else self.radix))?
                 return Ok(())
+            radix = self.radix
+            odd = exponent % 2 != 0
             half = self.power(exponent // 2)?
-            square = (half * half)?
-            result = if exponent % 2 == 0:
-                square
-            else:
-                (square * from_i64(self.radix))?
+            result = match &half._value:
+                case Value.Small(_):
+                    square = (half * half)?
+                    if odd:
+                        (square * from_i64(radix))?
+                    else:
+                        square
+                case Value.Large(_, limbs):
+                    extend_radix_power(&limbs, u64(radix), odd)?
             self.exact.insert(exponent, result)?
             Ok(())
 
-def parse_small(data: &[u8], start: i64, stop: i64, radix: i64) -> BigInt:
+# A power is squared at each step and multiplied by one more radix
+# when the exponent is odd. Whole low zero limbs give an exact shift.
+def extend_radix_power(limbs: &[u64], radix: u64, odd: bool) -> Result[BigInt, AllocError]:
     unchecked:
-        mut value = 0
-        for i in range(start, stop):
-            value = value * radix + digit_value(data[i])
-        from_i64(value)
+        low = first_nonzero_word(limbs)
+        width = 2 * len(limbs)
+        mut out = zeros(width + (1 if odd else 0))?
+        used = &limbs[low:]
+        product = &mut out[2 * low:width]
+        if use_transform(len(used), len(used)):
+            multiply_transform_wide_into(used, used, product, square=True)?
+        else:
+            multiply_into(used, used, product)?
+        if odd:
+            carry = multiply_word_add(product, radix, 0u64)
+            out[width] = carry
+        Ok(canonical(False, out))
 
-def parse_digits(data: &[u8], start: i64, stop: i64, radix: i64, powers: &mut RadixPowers) -> Result[BigInt, AllocError]:
+def first_nonzero_word(limbs: &[u64]) -> i64:
     unchecked:
-        if stop - start <= 12:
-            return Ok(parse_small(data, start, stop, radix))
-        middle = start + (stop - start) // 2
-        left = parse_digits(data, start, middle, radix, &mut powers)?
-        right = parse_digits(data, middle, stop, radix, &mut powers)?
-        power = powers.power(stop - middle)?
-        shifted = (left * power)?
-        shifted + right
+        mut i = 0
+        while limbs[i] == 0u64:
+            i += 1
+        i
+
+# Every digit was validated before parsing. The caller gives a range
+# whose magnitude fits a word, including an empty range for zero.
+def parse_word(data: &[u8], radix: u64) -> u64:
+    unchecked:
+        mut value = 0u64
+        if radix == 10u64:
+            for byte in data:
+                value = value * 10u64 + u64(*byte - 48u8)
+        else:
+            for byte in data:
+                value = value * radix + decoded_digit(*byte)
+        value
+
+# For validated ASCII, the low five bits give 16..25 for numbers and
+# 1..26 for letters. Bit six is set only for letters of either case.
+def decoded_digit(byte: u8) -> u64:
+    unchecked:
+        u64(byte & 31u8) + 25u64 * u64(byte >> 6u8) - 16u64
+
+def signed_word(negative: bool, word: u64) -> Result[BigInt, AllocError]:
+    unchecked:
+        if word <= 9223372036854775807u64:
+            return Ok(from_i64(-i64(word) if negative else i64(word)))
+        if negative and word == 9223372036854775808u64:
+            return Ok(from_i64(i64.MIN))
+        Ok(BigInt(Value.Large(negative, [word]?)))
+
+def radix_bit_width(radix: u64) -> i64:
+    unchecked:
+        mut bits = 0
+        mut value = radix
+        while value > 1u64:
+            value >>= 1u64
+            bits += 1
+        bits
+
+def parse_power_of_two(data: &[u8], radix: u64, negative: bool) -> Result[BigInt, AllocError]:
+    unchecked:
+        bits = radix_bit_width(radix)
+        if len(data) <= 64 // bits:
+            return signed_word(negative, parse_word(data, radix))
+        # Compute ceil(len(data) * bits / 64) without multiplying the full length.
+        count = len(data) // 64 * bits + (len(data) % 64 * bits + 63) // 64
+        mut limbs = zeros(count)?
+        mut word = 0u64
+        mut index = 0
+        mut shift = 0
+        mut i = len(data)
+        while i > 0:
+            i -= 1
+            digit = decoded_digit(data[i])
+            word |= digit << u64(shift)
+            shift += bits
+            if shift >= 64:
+                limbs[index] = word
+                index += 1
+                shift -= 64
+                word = digit >> u64(bits - shift)
+        if shift != 0:
+            limbs[index] = word
+        Ok(canonical(negative, limbs))
+
+const PARSE_LEAF_GROUPS: i64 = 112
+
+def parse_digits(data: &[u8], split: i64, radix: u64, width: i64, factor: u64, powers: &mut RadixPowers) -> Result[list[u64], AllocError]:
+    unchecked:
+        if len(data) <= PARSE_LEAF_GROUPS * width:
+            return parse_leaf(data, radix, width, factor)
+        # The right-hand width is shared across each depth. The left
+        # child absorbs the extra digit whenever the width is odd.
+        middle = len(data) - split
+        left = parse_digits(&data[:middle], split // 2, radix, width, factor, &mut powers)?
+        right = parse_digits(&data[middle:], split // 2, radix, width, factor, &mut powers)?
+        if len(left) == 0:
+            return Ok(right)
+        power = powers.power(split)?
+        match &power._value:
+            case Value.Large(_, scale):
+                combine_parse_words(&left, &right, &scale)
+            case Value.Small(_):
+                scale = [power.word(0)]?
+                combine_parse_words(&left, &right, &scale)
+
+def combine_parse_words(left: &[u64], right: &[u64], scale: &[u64]) -> Result[list[u64], AllocError]:
+    unchecked:
+        mut shift = first_nonzero_word(scale)
+        # Stripping zero limbs from even radix powers is useful unless
+        # doing so would send a balanced product to schoolbook.
+        if len(scale) - shift < (len(left) + 1) // 2:
+            shift = 0
+        mut result = zeros(len(left) + len(scale))?
+        multiply_into(left, &scale[shift:], &mut result[shift:])?
+        add_shifted(&mut result, right, 0)
+        trim(&mut result)
+        Ok(result)
+
+def parse_leaf(data: &[u8], radix: u64, width: i64, factor: u64) -> Result[list[u64], AllocError]:
+    unchecked:
+        first = (len(data) - 1) % width + 1
+        mut limbs = zeros((len(data) - 1) // width + 1)?
+        head = parse_word(&data[:first], radix)
+        limbs[0] = head
+        mut used = 0 if head == 0u64 else 1
+        mut end = first
+        while end < len(data):
+            next = end + width
+            chunk = parse_word(&data[end:next], radix)
+            carry = multiply_word_add(&mut limbs[:used], factor, chunk)
+            if carry != 0u64:
+                limbs[used] = carry
+                used += 1
+            end = next
+        trim(&mut limbs)
+        Ok(limbs)
+
+# With B = 2^64, (B-1)^2 + (B-1) < B^2.
+def multiply_word_add(limbs: &mut [u64], factor: u64, addend: u64) -> u64:
+    unchecked:
+        mut carry = addend
+        for i in range(len(limbs)):
+            (low, high) = limbs[i].widening_mul(factor)
+            sum = low.wrapping_add(carry)
+            limbs[i] = sum
+            carry = high + borrow_bit(sum, low, carry)
+        carry
+
+# Return the greatest radix power that fits in a limb and its digit width.
+def radix_group(radix: u64) -> (i64, u64):
+    unchecked:
+        limit = u64.MAX // radix
+        mut factor = radix
+        mut width = 1
+        while factor <= limit:
+            factor *= radix
+            width += 1
+        (width, factor)
 
 # A word-sized radix power lets short division extract a full group of
 # digits at a time. Normalize the divisor and invert it once per render.
@@ -437,11 +595,7 @@ class RadixChunk:
 
 def radix_chunk(radix: u64) -> RadixChunk:
     unchecked:
-        mut divisor = radix
-        mut width = 1
-        while divisor <= u64.MAX // radix:
-            divisor *= radix
-            width += 1
+        (width, divisor) = radix_group(radix)
         mut bits = 0
         mut high = divisor
         while high > 1u64:
@@ -518,11 +672,7 @@ def render_large(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntEr
 
 def render_power_of_two(value: &BigInt, radix: u64, bits: i64, limit: i64) -> Result[str, BigIntError]:
     unchecked:
-        mut group = 1
-        mut high = radix >> 1u64
-        while high > 1u64:
-            high >>= 1u64
-            group += 1
+        group = radix_bit_width(radix)
         width = (bits - 1) // group + 1
         if width > limit:
             return Err(BigIntError.LimitExceeded)
@@ -604,8 +754,8 @@ def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u
         render_digits(&right, radix, chunk, &mut output[middle:], split // 2, True, &mut powers)?
         Ok(())
 
-# Only this constructor can create a large representation. Zero has no sign;
-# every value in the signed word range returns to the inline representation.
+# Normalize an owned magnitude. Zero has no sign and each value in the signed
+# word range returns to the inline representation.
 def canonical(negative: bool, source: list[u64]) -> BigInt:
     mut value = source
     trim(&mut value)
@@ -916,28 +1066,28 @@ def copy_words(source: &[u64], out: &mut [u64]) -> ():
 # regenerated by experiments/bigint-comparison/algorithms-next/constants.py.
 # A cyclic product wraps at the power-of-two output length. Each packed
 # coefficient still has at most one term per point, so the CRT bound holds.
-def multiply_transform_wide_into(a: &[u64], b: &[u64], out: &mut [u64], cyclic: bool = False) -> Result[(), AllocError]:
+def multiply_transform_wide_into(a: &[u64], b: &[u64], out: &mut [u64], cyclic: bool = False, square: bool = False) -> Result[(), AllocError]:
     unchecked:
         digits = len(out) // 2 if cyclic else (len(a) + 1) // 2 + (len(b) + 1) // 2
         mut n = 1
         while n < digits:
             n *= 2
         mut x = zeros(n)?
-        mut y = zeros(n)?
+        mut y = zeros(0 if square else n)?
         mut roots = zeros(n // 2)?
         mut residues0 = zeros(digits)?
         mut residues1 = zeros(digits)?
         mut residues2 = zeros(digits)?
         mut residues3 = zeros(digits)?
-        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152779667606863873u64, 3u64, 1152779667606863871u64, 2269391999729648u64, 438850205479958496u64, 577409928151867344u64)
+        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152779667606863873u64, 3u64, 1152779667606863871u64, 2269391999729648u64, 438850205479958496u64, 577409928151867344u64, square)
         copy_words(&x, &mut residues0)
-        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152702701792919553u64, 5u64, 1152702701792919551u64, 3500845022838768u64, 549807853720474145u64, 836242407834260066u64)
+        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152702701792919553u64, 5u64, 1152702701792919551u64, 3500845022838768u64, 549807853720474145u64, 836242407834260066u64, square)
         copy_words(&x, &mut residues1)
-        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152654323281297409u64, 3u64, 1152654323281297407u64, 4274901208793072u64, 1065844120376875002u64, 870989715713157113u64)
+        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152654323281297409u64, 3u64, 1152654323281297407u64, 4274901208793072u64, 1065844120376875002u64, 870989715713157113u64, square)
         copy_words(&x, &mut residues2)
-        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152647726211530753u64, 3u64, 1152647726211530751u64, 4380454325059568u64, 726084339089016087u64, 915534325496093643u64)
+        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152647726211530753u64, 3u64, 1152647726211530751u64, 4380454325059568u64, 726084339089016087u64, 915534325496093643u64, square)
         copy_words(&x, &mut residues3)
-        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152577357467353089u64, 7u64, 1152577357467353087u64, 5506354231902192u64, 1052221714738828282u64, 443901272462896093u64)
+        transform_wide_product(a, b, &mut x, &mut y, &mut roots, 1152577357467353089u64, 7u64, 1152577357467353087u64, 5506354231902192u64, 1052221714738828282u64, 443901272462896093u64, square)
         (c0, c1, c2) = transform_wide_recover(&residues0, &residues1, &residues2, &residues3, &x, out)
         if cyclic:
             # B^len(out) is congruent to one. Fold the carry back into
@@ -993,7 +1143,7 @@ def transform_wide_load(words: &[u64], out: &mut [u64], p: u64, inverse: u64, r3
         for i in range(count, len(out)):
             out[i] = 0u64
 
-def transform_wide_product(a: &[u64], b: &[u64], x: &mut [u64], y: &mut [u64], roots: &mut [u64], p: u64, generator: u64, inverse: u64, r: u64, r2: u64, r3: u64) -> ():
+def transform_wide_product(a: &[u64], b: &[u64], x: &mut [u64], y: &mut [u64], roots: &mut [u64], p: u64, generator: u64, inverse: u64, r: u64, r2: u64, r3: u64, square: bool) -> ():
     unchecked:
         n = len(x)
         root = transform_wide_power(generator, (p - 1u64) // u64(n), p, inverse, r, r2)
@@ -1001,11 +1151,15 @@ def transform_wide_product(a: &[u64], b: &[u64], x: &mut [u64], y: &mut [u64], r
         for i in range(1, len(roots)):
             roots[i] = transform_wide_multiply(roots[i - 1], root, p, inverse)
         transform_wide_load(a, x, p, inverse, r3)
-        transform_wide_load(b, y, p, inverse, r3)
         transform_wide_forward(x, roots, p, inverse)
-        transform_wide_forward(y, roots, p, inverse)
-        for i in range(n):
-            x[i] = transform_wide_multiply(x[i], y[i], p, inverse)
+        if square:
+            for i in range(n):
+                x[i] = transform_wide_multiply(x[i], x[i], p, inverse)
+        else:
+            transform_wide_load(b, y, p, inverse, r3)
+            transform_wide_forward(y, roots, p, inverse)
+            for i in range(n):
+                x[i] = transform_wide_multiply(x[i], y[i], p, inverse)
         transform_wide_inverse(x, roots, p, inverse)
         scale = transform_wide_multiply(transform_wide_power(u64(n), p - 2u64, p, inverse, r, r2), 1u64, p, inverse)
         for i in range(n):

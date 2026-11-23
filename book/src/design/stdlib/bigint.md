@@ -110,9 +110,15 @@ divides by the high half of the divisor and uses a multiplication by the
 omitted low half to correct its estimate. This gives subquadratic division
 when both operand shapes can use subquadratic multiplication.
 
-Parsing and non-power-of-two rendering split digit ranges recursively and
-share radix powers within a conversion. Rendering uses one split exponent
-per depth and caches the normalized divisors. For qualifying repeated
+Parsing validates the full input before allocating limb storage. Leading
+zeros count toward the digit cap and are skipped during construction.
+Bases 2, 4, 8, 16, and 32 pack digit bits directly into limbs. Other bases
+build a limb buffer by multiplying and adding groups of digits that fit in
+one word. Large inputs split recursively and share the radix power at each
+depth. Values in the signed 64-bit range are stored inline.
+
+Non-power-of-two rendering also uses one split exponent per depth and
+caches the normalized divisors. For qualifying repeated
 splits, it also caches a multi-limb Barrett reciprocal. An estimate from the
 high remainder limbs is corrected with a shorter cyclic transform of the
 quotient times the divisor. The division and transform cutoffs depend on
@@ -124,10 +130,10 @@ digits into a shared buffer. At the leaves, short division by a
 one-word radix power extracts several characters at a time. Each render
 computes its chunk divisor's reciprocal once. Decimal chunks contain 19
 digits. Bases 2, 4, 8, 16, and 32 extract bit groups directly. Single-word
-rendering uses scalar division without a power cache. Conversion scratch allocations are fallible.
-Truncated vector transforms and specialized squaring are not implemented.
-No native multiplication kernel is used, and crossover choices are implementation
-details, not performance promises.
+rendering uses scalar division without a power cache. Conversion scratch
+allocations are fallible. Large radix-power squares reuse a single forward
+transform. General multiplication uses the two-operand transform.
+The crossovers between implementations depend on operand size and shape.
 
 Text conversion has explicit digit caps. Formatting through `display[W](out:
 &mut Formatter[W]) -> Result[(), FormatError]` uses decimal with the default
@@ -165,6 +171,7 @@ numeric carry bit, not a mode selection.
 - Peter L. Montgomery, [Modular multiplication without trial division](https://doi.org/10.1090/S0025-5718-1985-0777282-X):
   exact modular arithmetic for transform residues, roots and products.
 - [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
-  bit-length sizing, direct power-of-two rendering, grouped short division,
-  recursive quotient blocks, and reuse of Barrett reciprocals with cyclic
-  correction products. This is an independent Plenty implementation.
+  bit-length sizing, direct bit packing and extraction, grouped digit
+  conversion, radix-power squaring, recursive quotient blocks, and reuse of
+  Barrett reciprocals with cyclic correction products. This is an independent
+  Plenty implementation.
