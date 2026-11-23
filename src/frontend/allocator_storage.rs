@@ -98,6 +98,7 @@ pub(super) fn named(name: &str) -> bool {
             | "__allocator_text_slice"
             | "__allocator_dict_set"
             | "__allocator_box"
+            | "__allocator_into_values"
             | "__allocator_copy"
             | "__allocator_block"
             | "__allocator_block_release"

@@ -79,6 +79,43 @@ fn boxed_key_view_prevents_mutating_the_owner() {
     assert!(error.contains("conflicting borrow"), "{error}");
 }
 
+#[test]
+fn selected_into_values_moves_affine_rows_after_full_reservation() {
+    super::test_std_alloc::assert_stdout(
+        &format!(
+            r#"{}
+class Row:
+    id: i64
+    def __del__(self) -> ():
+        print("row", self.id).unwrap()
+
+class Key:
+    n: i64
+    def __del__(self) -> ():
+        print("key", self.n).unwrap()
+
+def run(blocks: i64) -> Result[(), IoError]:
+    out = budget("out", blocks, AllocError.CapacityOverflow)
+    source = {{Key(3): Row(30), Key(1): Row(10)}}.unwrap()
+    match out.into_values(source):
+        case Ok(rows):
+            drop(out)
+            print(rows[0].id, rows[1].id)?
+        case Err(error):
+            print(error)?
+    Ok(())
+
+def main() -> Result[(), IoError]:
+    for n in range(4):
+        run(n)?
+    Ok(())
+"#,
+            super::test_std_alloc_set_algebra::POLICY
+        ),
+        "refused out\nkey 3\nrow 30\nkey 1\nrow 10\nAllocError.CapacityOverflow\nout 0 0\nrefused out\nkey 3\nrow 30\nkey 1\nrow 10\nAllocError.CapacityOverflow\nout 0 1\nrefused out\nkey 3\nrow 30\nkey 1\nrow 10\nAllocError.CapacityOverflow\nout 0 2\nkey 3\nkey 1\n30 10\nrow 30\nrow 10\nout 0 3\n",
+    );
+}
+
 #[cfg(feature = "runtime-checks")]
 #[test]
 fn into_keys_allocation_failure_consumes_and_drops_affine_values_once() {
