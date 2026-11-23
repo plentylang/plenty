@@ -28,8 +28,8 @@ pub(super) unsafe fn report(value: u128, ty: *const Type) {
         out.push(b'\n');
     }
     let message = out.finish();
-    let bytes = match &message {
-        Ok(bytes) if !bytes.is_empty() => bytes.as_slice(),
+    let bytes = match message {
+        Ok(bytes) if !bytes.is_empty() => bytes,
         _ => FALLBACK,
     };
     // One write keeps the line whole. Its failure is not reported anywhere:

@@ -24,17 +24,19 @@ count=  12, label="one\ntwo"
 ```
 
 To choose storage, pass an allocator when constructing the formatter and again
-when finishing. The result can outlive the formatter.
+when finishing. For a field such as a list of pairs, `format_in` also selects
+where its temporary spelling is built. These allocators need not be the same;
+here we reuse one for all three roles. The result can outlive the formatter.
 
 ```plenty
 import std.alloc as alloc
 import std.fmt as fmt
 
-def main() -> Result[(), fmt.FormatError | IoError]:
+def main() -> Result[(), fmt.FormatError | AllocError | IoError]:
     storage = alloc.system()
     mut output = fmt.string_formatter_in(&storage, 80, 8)?
-    label = "ready"
-    output.format(f"label={label!r:>9}")?
+    rows = [("ready", 2)]?
+    output.format_in(&storage, f"rows={rows}")?
     message = fmt.finish_in(&storage, &output)?
     drop(output)
     print(message)?
@@ -42,7 +44,7 @@ def main() -> Result[(), fmt.FormatError | IoError]:
 ```
 
 ```output
-label=  "ready"
+rows=[("ready", 2)]
 ```
 
 Your type chooses separate display and debug methods. Both can be generic over

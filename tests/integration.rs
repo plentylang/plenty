@@ -29,6 +29,7 @@ mod test_std_alloc_copy_view;
 mod test_std_alloc_decode_view;
 #[path = "test_std_alloc_dict_set.rs"]
 mod test_std_alloc_dict_set;
+mod test_std_alloc_field_repr;
 mod test_std_alloc_join_bytes;
 #[path = "test_std_alloc_key_view.rs"]
 mod test_std_alloc_key_view;

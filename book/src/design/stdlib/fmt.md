@@ -258,6 +258,24 @@ supported x86-64 Linux GNU target and adds no external library dependency.
 
 `string_formatter_in(&buffers, max_bytes, max_depth)` creates a collected formatter whose scratch and cursor grow through `buffers`. `finish_in(&result_allocator, &formatter)` borrows the cursor and copies valid UTF-8 into inline or selected text. The allocators may differ. Refusal returns `FormatError.Allocation`; a failed finish leaves the formatter usable. As with `finish`, manually inserting invalid UTF-8 into the public cursor is a programmer error. These choices do not redirect allocations inside user methods or `represent`.
 
+## Select structural field scratch
+
+`output.format_in(&scratch, f"{rows}")` selects the temporary storage used to
+spell a field. A list, tuple or other hook-free structural value is rendered
+in one pass to a growable byte buffer, including nested values and quoted
+strings. Both that buffer and any non-inline temporary text use `scratch`.
+The formatter and writer keep their own storage policies. No allocator is
+inferred from an input or used as a backup on refusal.
+
+Even an inline spelling such as `[]` needs render scratch. An allocation
+refusal returns `FormatError.Allocation` before writing this field, keeping
+earlier fields intact. After rendering, the usual text, precision, padding
+and `!a` rules apply, including their byte-budget checks and partial writer
+progress. The byte limit bounds output, not temporary storage. Use a bounded
+allocator to limit scratch separately. `format` and standalone f-strings
+retain their ordinary allocation policy; this choice does not redirect work
+inside a user method.
+
 ## Acknowledgements
 
 - Format specs follow [Python's format specification mini-language](https://docs.python.org/3/library/string.html#formatspec).

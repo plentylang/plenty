@@ -7,6 +7,16 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Selected structural field scratch
+
+The [field audit](../design/toolchain/02-architecture/allocation-sites.md#who-pays-for-an-f-string-field)
+found an ordinary buffer behind aggregate f-string fields, even with a selected
+collector. `output.format_in(&scratch, f"{rows}")` builds hook-free structural
+spellings through the selected allocator. Render refusal precedes any write of
+this field. `tests/test_std_alloc_field_repr.rs` exercises refusal, nested values,
+layout, writer progress and preallocated scratch without system allocation.
+This does not change ordinary formatting or select memory used by nested hooks.
+
 ### Submitter checks allocator callbacks
 
 Issue #1014 extends the [submitting-worker wait rule](../design/facilities/03-concurrency/executors.md) to allocator callbacks and registered state destruction. The check matches coordination types rather than allocator instances; it does not ban all custom allocation on pool workers.

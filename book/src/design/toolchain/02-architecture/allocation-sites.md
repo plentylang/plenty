@@ -69,12 +69,12 @@ scratch and cursor buffers. In contrast, `out.format(f"...")` writes to the
 existing formatter and returns no string. With `string_formatter_in`, that
 formatter's buffers grow through the construction allocator; a later
 `finish_in` independently selects the final text. Neither choice changes
-how the compiler spells a field.
+how the compiler spells a field on the ordinary `format` path.
 
 | Field written to an existing formatter | What happens before the writer receives it |
 | --- | --- |
 | Plain signed integer, `f"{n}"` | Lowering calls `Formatter.integer`. It computes the sign and magnitude, then `unsigned` emits one inline digit at a time through `text`. There is no separate decimal string or digit buffer. The formatter can still need scratch and writer capacity. This is not the path for every numeric spec. |
-| Nested list of strings, no hooks, `f"{rows}"` | `std.fmt.represent` first calls `str.repr`. Runtime opcode 110 recursively writes the brackets, separators and quoted string elements into **one system render buffer**, not a string per row. It finishes that buffer and copies the spelling to inline or system text. Only then does `output.text` write it using the outer formatter. Even the short spelling `[[]]` needs rendering scratch. A render refusal occurs before any bytes of this field are sent; it does not undo earlier fields. |
+| Nested list of strings, no hooks, `f"{rows}"` | `std.fmt.represent` first calls `str.repr`. Runtime opcode 110 recursively writes the brackets, separators and quoted string elements into **one system render buffer**, not a string per row. It finishes that buffer and copies the spelling to inline or system text. Only then does `output.text` write it using the outer formatter. Even the short spelling `[[]]` needs rendering scratch. A render refusal occurs before any bytes of this field are sent; it does not undo earlier fields. With `output.format_in(&scratch, f"{rows}")`, opcode 682 uses the same recursive render walk without hooks, but grows its byte block and finishes non-inline field text through `scratch`, not the system. |
 | User-defined `display`, `f"{item}"` versus `f"{item:>12}"` | With no spec, the generated caller passes the existing formatter to the hook. Writes use that formatter; allocations explicitly made inside the hook follow the hook's own code. With a width, the compiler instead invokes the hook **once** into a private ordinary string formatter, finishes its text, then pads it through the outer formatter. The inner scratch, cursor and non-inline text are system-backed even if the outer formatter is selected. They belong to the compiler-generated helper, not the hook author. |
 
 Nested hooks differ from a top-level streaming hook: a list element's
