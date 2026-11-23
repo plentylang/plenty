@@ -909,6 +909,12 @@ pub def ascii_string(value: &strview) -> Result[str, FormatError]:
     output.ascii_text(value)?
     finish(&output)
 
+# The escaped spelling may itself exceed inline text, independently of its input.
+pub def ascii_string_in[A](scratch: &A, value: &strview) -> Result[str, FormatError]:
+    mut output = string_formatter_in(scratch, 9223372036854775807, 0)?
+    output.ascii_text(value)?
+    finish_in(scratch, &output)
+
 def list_body[T, W, F: Callable[[&T, &mut Formatter[W]], Result[(), FormatError]]](values: &list[T], output: &mut Formatter[W], render: F) -> Result[(), FormatError]:
     output.text("[")?
     mut first = True
