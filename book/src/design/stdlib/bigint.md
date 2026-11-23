@@ -87,17 +87,16 @@ arithmetic uses exact Montgomery reduction with R = 2⁶⁴. The scalar radix-2
 transforms reuse fixed scratch and computed twiddle tables. At 65,536 bits per
 operand, the transform length is 1,024, compared with 8,192 for the former
 16-bit path and 4,096 for the intermediate 32-bit path.
-The NTT requires both operands to have at least 1,024 limbs, a size ratio at
-most 2:1, at least five-eighths transform occupancy, and at most 524,288
-combined limbs. Occupancy uses the actual digit counts, rounding each operand's
-limb count up to a pair, including padding for odd limb counts. The primes'
-2⁴⁰ transform order exceeds this retained cap. When the longer operand exceeds
-twice the shorter operand's width, qualifying products split the longer
-operand into blocks the width of the shorter operand. Full blocks use the
-transform and reuse a scratch row for overlapping partial products. Other
-shapes use Toom-3, Karatsuba, or schoolbook multiplication as applicable.
-This transform bound is an algorithm-selection limit, not a limit on BigInt
-precision.
+The direct NTT requires both operands to have at least 1,024 limbs, a size
+ratio at most 2:1, and at most 524,288 combined limbs. The transform uses a
+power-of-two root order and computes only the evaluations needed to recover
+the packed product. The primes' 2⁴⁰ transform order exceeds the retained cap.
+When the longer operand exceeds twice the shorter operand's width, qualifying
+products split it into blocks the width of the shorter operand. Full blocks
+share the shorter operand's evaluations and roots for each prime, then reuse
+the inverse and partial-product buffers. Other shapes use Toom-3, Karatsuba,
+or schoolbook multiplication as applicable, including values above the
+transform's limb limit.
 Karatsuba and Toom-3 borrow operand limb views and write
 their low and high products (the evaluations at 0 and infinity) directly into
 disjoint regions of the final output, avoiding two owned recursive product
@@ -113,6 +112,8 @@ Large balanced divisions process quotient blocks recursively. Each block
 divides by the high half of the divisor and uses a multiplication by the
 omitted low half to correct its estimate. This gives subquadratic division
 when both operand shapes can use subquadratic multiplication.
+Sufficiently large divisions also use a Newton-built Barrett reciprocal
+when the quotient blocks allow a short cyclic correction product.
 For a large divisor and a short quotient of `k` limbs, division can estimate
 the quotient from the top `2k` dividend limbs and `k` divisor limbs, then
 correct it with one product using the omitted divisor limbs. This path
@@ -128,10 +129,11 @@ depth. Values in the signed 64-bit range are stored inline.
 
 Non-power-of-two rendering also uses one split exponent per depth and
 caches the normalized divisors. For qualifying repeated
-splits, it also caches a multi-limb Barrett reciprocal. An estimate from the
-high remainder limbs is corrected with a shorter cyclic transform of the
-quotient times the divisor. The division and transform cutoffs depend on
-the significant limb counts after removing whole zero low limbs.
+splits, it also caches a multi-limb Barrett reciprocal. It computes wider
+reciprocals with Newton iteration. It corrects an estimate from the high
+remainder limbs with a shorter cyclic transform of the quotient times the
+divisor. The division and transform cutoffs depend on the significant limb
+counts after removing whole zero low limbs.
 
 The renderer bounds the digit count from the bit length, compares against
 one exact radix power if those bounds straddle the cap, and writes ASCII
@@ -177,10 +179,13 @@ numeric carry bit, not a mode selection.
   the published multimodular convolution method used for large multiplication,
   also used by Malachite’s FLINT-derived small-prime FFT. This is an independent
   integer radix-2 implementation; no FLINT/Malachite code or tables ship.
+- Joris van der Hoeven, [Truncated FFTs](https://www.texmacs.org/joris/issac04/issac04.html),
+  describes how to recover a linear convolution from a truncated transform.
+  Plenty applies the algorithm over its exact prime fields.
 - Peter L. Montgomery, [Modular multiplication without trial division](https://doi.org/10.1090/S0025-5718-1985-0777282-X):
   exact modular arithmetic for transform residues, roots and products.
 - [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
   bit-length sizing, direct bit packing and extraction, grouped digit
   conversion, radix-power squaring, recursive quotient blocks, short-quotient
-  division, and reuse of Barrett reciprocals with cyclic correction products.
+  division, and Newton reciprocals with cyclic Barrett correction products.
   This is an independent Plenty implementation.

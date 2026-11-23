@@ -406,6 +406,30 @@ fn skewed_multiplication_carries_across_blocks_and_a_short_tail() {
 }
 
 #[test]
+fn barrett_division_handles_rounded_prefixes_and_signed_remainders() {
+    let body = r#"    one = from_i64(1)
+    base = (one << 393216)?
+    # A 6144-limb divisor admits two cyclic correction blocks. The first
+    # divisor makes the rounded reciprocal prefix overflow. The second
+    # is close to half the limb base and has nonzero omitted limbs.
+    divisors = [(base - one)?, (((one << 393215)? + (one << 164999)?)? - one)?]?
+    for divisor in &divisors:
+        triple = ((divisor << 1)? + *divisor)?
+        a = ((((divisor << 393216)?) - triple)? - one)?
+        (q, r) = a.checked_divmod(divisor)?
+        print(q == (base - from_i64(4))?, r == (divisor - one)?)?
+        low = ((one << 68)? - one)?
+        shifted_a = ((a << 68)? + low)?
+        shifted_divisor = (divisor << 68)?
+        (floor, modulus) = (-shifted_a)?.checked_divmod(&shifted_divisor)?
+        print(floor == (from_i64(3) - base)?, modulus == one)?
+"#;
+    let expected = "True True\n".repeat(4);
+    assert_eq!(run(body, false), expected);
+    assert_eq!(run(body, true), expected);
+}
+
+#[test]
 fn decimal_render_reuses_a_large_split_power_at_the_exact_cap() {
     let body = r#"    text = "98765432101234567890".repeat(15800)?
     value = parse(text, 10, 316000)?
@@ -547,11 +571,12 @@ fn toom3_products_cover_thirds_signs_and_carry_chains() {
 fn transform_products_cover_padding_carries_signs_and_unequal_operands() {
     let mut body = String::new();
     let mut expected = String::new();
-    // Exercise the transform threshold and its seven-eighths occupancy gate.
+    // Exercise the size threshold and truncation just above a power of two.
     // All-one digits maximize convolution coefficients and carry chains.
     for (index, (a, b)) in [
         (1023, 1023),
         (1024, 1024),
+        (1024, 1025),
         (1025, 1025),
         (1535, 1535),
         (1536, 1536),
@@ -561,6 +586,7 @@ fn transform_products_cover_padding_carries_signs_and_unequal_operands() {
         (1793, 1793),
         (2048, 1024),
         (1024, 2048),
+        (1025, 3092),
     ]
     .into_iter()
     .enumerate()

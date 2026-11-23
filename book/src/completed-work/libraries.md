@@ -190,6 +190,21 @@ sweep and independent checks are in
 `experiments/bigint-comparison/short-division/`. Issue #987 tracks
 the remaining gap and scratch reuse inside recursive multiplication.
 
+### Bigint truncated transforms and Newton reciprocals (issue #987)
+
+Linear multiplication skips padded transform values. Full blocks of a skewed
+product reuse the shorter operand's transform and roots, with scratch bounded
+by the block width. The transform applies normalization before its inverse
+pass.
+
+Wide Barrett reciprocals use a precision-doubling Newton iteration. Division
+also uses them for large operands when each quotient block can use a short
+cyclic correction. Exact product and quotient fixtures cover odd packed
+lengths, carry boundaries, and rounded reciprocal prefixes. Benchmark data
+and the reciprocal error bound are described in
+`experiments/bigint-comparison/truncated-transform/`. Issue #987 tracks the
+remaining arithmetic and conversion latency.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary
