@@ -430,6 +430,29 @@ fn barrett_division_handles_rounded_prefixes_and_signed_remainders() {
 }
 
 #[test]
+fn barrett_cyclic_correction_recovers_limbs_above_the_transform() {
+    let body = r#"    one = from_i64(1)
+    # 8192 limbs is the transform width in all three cases. The last
+    # case also exercises the recursive low product with an odd width.
+    for bits in [524288, 524352, 528384]?:
+        base = (one << bits)?
+        divisors = [(base - one)?, (((base >> 1)? + (one << 170321)?)? + one)?]?
+        for divisor in &divisors:
+            # Construct d*(B^n-2) from shifts, independently of multiplication.
+            exact = (((divisor << bits)?) - (divisor << 1)?)?
+            (q, r) = exact.checked_divmod(divisor)?
+            print(q == (base - from_i64(2))?, r == from_i64(0))?
+            (floor, modulus) = (one - exact)?.checked_divmod(divisor)?
+            print(floor == (from_i64(2) - base)?, modulus == one)?
+            (previous, near) = (exact - one)?.checked_divmod(divisor)?
+            print(previous == (base - from_i64(3))?, near == (divisor - one)?)?
+"#;
+    let expected = "True True\n".repeat(18);
+    assert_eq!(run(body, false), expected);
+    assert_eq!(run(body, true), expected);
+}
+
+#[test]
 fn decimal_render_reuses_a_large_split_power_at_the_exact_cap() {
     let body = r#"    text = "98765432101234567890".repeat(15800)?
     value = parse(text, 10, 316000)?

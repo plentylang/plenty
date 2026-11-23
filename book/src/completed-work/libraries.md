@@ -205,6 +205,17 @@ and the reciprocal error bound are described in
 `experiments/bigint-comparison/truncated-transform/`. Issue #987 tracks the
 remaining arithmetic and conversion latency.
 
+### Bigint cyclic correction across limb boundaries (issue #987)
+
+A divisor at or just above a power-of-two limb width can use Barrett
+division with a cyclic transform at that width. A second residue from a
+short low product reconstructs the exact correction. Qualifying Newton
+steps use the same technique to recover their residuals.
+
+The report in `experiments/bigint-comparison/cyclic-products/` records the
+crossover, exact validation, and the scalar radix-4 and guarded high-product
+trials. Issue #987 tracks the remaining gap to Malachite.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

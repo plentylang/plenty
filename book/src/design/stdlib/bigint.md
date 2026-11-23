@@ -114,6 +114,10 @@ omitted low half to correct its estimate. This gives subquadratic division
 when both operand shapes can use subquadratic multiplication.
 Sufficiently large divisions also use a Newton-built Barrett reciprocal
 when the quotient blocks allow a short cyclic correction product.
+For divisors near and just above a power-of-two limb width, the correction
+uses a cyclic transform at that width and a short product for the lowest
+limbs. Together those residues determine the full correction. Newton
+iteration also uses the cyclic product for qualifying residuals.
 For a large divisor and a short quotient of `k` limbs, division can estimate
 the quotient from the top `2k` dividend limbs and `k` divisor limbs, then
 correct it with one product using the omitted divisor limbs. This path
@@ -131,9 +135,10 @@ Non-power-of-two rendering also uses one split exponent per depth and
 caches the normalized divisors. For qualifying repeated
 splits, it also caches a multi-limb Barrett reciprocal. It computes wider
 reciprocals with Newton iteration. It corrects an estimate from the high
-remainder limbs with a shorter cyclic transform of the quotient times the
-divisor. The division and transform cutoffs depend on the significant limb
-counts after removing whole zero low limbs.
+remainder limbs with a cyclic product of the quotient and divisor, with the
+same short-product reconstruction when the divisor exceeds the transform
+width. The cutoffs depend on the significant limb counts after removing
+whole zero low limbs.
 
 The renderer bounds the digit count from the bit length, compares against
 one exact radix power if those bounds straddle the cap, and writes ASCII

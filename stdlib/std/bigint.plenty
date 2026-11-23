@@ -1572,7 +1572,7 @@ def inverse_division_word(divisor: u64) -> u64:
     inverse
 
 # The leading one of the fixed-point reciprocal is implicit. The
-# cyclic correction product uses modulus B^cyclic_words - 1.
+# correction uses B^cyclic_words-1 and, when needed, a short low product.
 class DivisionReciprocal:
     digits: list[u64]
     cyclic_words: i64
@@ -1592,10 +1592,8 @@ class WideDivisor:
             high = dividend_limbs - self.first - n
             if n < DIVISION_RECIPROCAL_LIMBS or n >= MAX_TRANSFORM_WORDS or high < n or high > 2 * n:
                 return Ok(())
-            cyclic = 2 * power_of_two_at_most(n)
-            # The modulus must stay close to the divisor, and every
-            # block, including the tail, must fit the cyclic correction.
-            if 4 * n < 3 * cyclic:
+            cyclic = division_cyclic_width(n)
+            if cyclic == 0:
                 return Ok(())
             blocks = (high + n - 2) // (n - 1)
             width = (high + blocks - 1) // blocks
@@ -1618,7 +1616,8 @@ class WideDivisor:
             if quotient_limbs <= n + n // 4:
                 return Ok(())
             half_cyclic = power_of_two_at_most(n)
-            cyclic = 2 * half_cyclic
+            fitted = division_cyclic_width(n)
+            cyclic = 2 * half_cyclic if fitted == 0 else fitted
             target = (quotient_limbs + 1) // 2
             block = half_cyclic if half_cyclic > target else target
             width = block if block < n else n - 1
@@ -1737,7 +1736,7 @@ def divide_blocked_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64,
             borrow = subtract_division_words(row, product)
             mut negative = not carry and borrow != 0u64
             while negative:
-                decrement_words(&mut q[offset:high])
+                drop(decrement_words(&mut q[offset:high]))
                 negative = not add_division_words(row, v)
             high = offset
         Ok(())
@@ -1755,11 +1754,12 @@ def clear_words(words: &mut [u64]) -> ():
     for word in words:
         *word = 0u64
 
-def decrement_words(words: &mut [u64]) -> ():
+def decrement_words(words: &mut [u64]) -> bool:
     for word in words:
         *word = (*word).wrapping_sub(1u64)
         if *word != u64.MAX:
-            break
+            return False
+    True
 
 def increment_words(words: &mut [u64]) -> bool:
     for word in words:
@@ -1786,6 +1786,96 @@ def subtract_division_words(row: &mut [u64], words: &[u64]) -> u64:
         row[i] = difference
         borrow = borrow_bit(a, b, partial) | borrow_bit(partial, borrow, difference)
     borrow
+
+# Write the product modulo B^len(out) into a zeroed destination.
+def multiply_low_into(a: &[u64], b: &[u64], out: &mut [u64]) -> Result[(), AllocError]:
+    unchecked:
+        n = len(out)
+        al = n if len(a) > n else len(a)
+        bl = n if len(b) > n else len(b)
+        if al == 0 or bl == 0:
+            return Ok(())
+        if al + bl <= n:
+            return multiply_into(&a[:al], &b[:bl], &mut out[:al + bl])
+        if n <= 64 or al < 16 or bl < 16:
+            for i in range(al):
+                x = a[i]
+                count = n - i if bl > n - i else bl
+                mut carry = 0u64
+                for j in range(count):
+                    (low, high) = x.widening_mul(b[j])
+                    previous = out[i + j]
+                    sum = low.wrapping_add(previous)
+                    total = sum.wrapping_add(carry)
+                    out[i + j] = total
+                    carry = high + borrow_bit(sum, low, previous) + borrow_bit(total, sum, carry)
+                if i + count < n:
+                    out[i + count] = carry
+            return Ok(())
+        # Only the two cross-products can contribute above the split.
+        # An odd output width also keeps one limb of the high product.
+        split = n // 2
+        alow = split if al > split else al
+        blow = split if bl > split else bl
+        multiply_into(&a[:alow], &b[:blow], &mut out[:alow + blow])?
+        if 2 * split < n and al > split and bl > split:
+            out[-1] = a[split].wrapping_mul(b[split])
+        mut partial = zeros(n - split)?
+        multiply_low_into(&a[:alow], &b[blow:bl], &mut partial)?
+        drop(add_division_words(&mut out[split:], &partial))
+        clear_words(&mut partial)
+        multiply_low_into(&b[:blow], &a[alow:al], &mut partial)?
+        drop(add_division_words(&mut out[split:], &partial))
+        Ok(())
+
+# B^width-1 gives cheap wraparound convolution at a power-of-two width.
+# A short low product recovers the extra limbs when the divisor is close
+# above that width. Prefer a larger direct cyclic product when it fits.
+def division_cyclic_width(n: i64) -> i64:
+    unchecked:
+        lower = power_of_two_at_most(n)
+        # Keep the short product within an eighth of the width plus one limb.
+        if n - lower <= lower // 8:
+            return lower
+        if n >= lower + lower // 2:
+            return 2 * lower
+        0
+
+def fold_cyclic(source: &[u64], out: &mut [u64]) -> ():
+    unchecked:
+        n = len(out)
+        first = n if len(source) > n else len(source)
+        copy_words(source, &mut out[:first])
+        clear_words(&mut out[first:])
+        mut offset = n
+        while offset < len(source):
+            count = n if len(source) - offset > n else len(source) - offset
+            if add_division_words(&mut out[:count], &source[offset:offset + count]) and increment_words(&mut out[count:]):
+                drop(increment_words(out))
+            offset += count
+
+# B^width-1 and zero encode the same residue.
+def canonical_cyclic_zero(out: &mut [u64]) -> ():
+    if out[0] != u64.MAX or out[-1] != u64.MAX:
+        return
+    for word in out:
+        if *word != u64.MAX:
+            return
+    clear_words(out)
+
+def multiply_wraparound(a: &[u64], b: &[u64], out: &mut [u64]) -> Result[(), AllocError]:
+    unchecked:
+        n = len(out)
+        if len(a) > n:
+            mut x = zeros(n)?
+            fold_cyclic(a, &mut x)
+            multiply_wraparound(&x, b, out)?
+            return Ok(())
+        if len(b) > n:
+            mut y = zeros(n)?
+            fold_cyclic(b, &mut y)
+            return multiply_transform_wide_into(a, &y, out, True)
+        multiply_transform_wide_into(a, b, out, True)
 
 def power_of_two_at_most(n: i64) -> i64:
     unchecked:
@@ -1824,9 +1914,25 @@ def reciprocal_at_precision(v: &[u64], width: i64) -> Result[list[u64], AllocErr
         # is nonnegative and fits in m+1 limbs.
         old = (width + 2) // 2
         estimate = reciprocal_at_precision(v, old)?
-        product = multiply(&prefix, &estimate)?
         mut residual = zeros(width + 1)?
-        drop(subtract_division_words(&mut residual, &product[:width + 1]))
+        cyclic = division_cyclic_width(width) if width >= 2048 else 0
+        if cyclic != 0 and cyclic < width + len(estimate):
+            # Recover the residual from the bounded wraparound product.
+            # B^(m+l) wraps to a single one at exponent (m+l) mod C.
+            mut product = zeros(cyclic)?
+            multiply_wraparound(&prefix, &estimate, &mut product)?
+            mut folded = zeros(cyclic)?
+            folded[(width + old) % cyclic] = 1u64
+            if subtract_division_words(&mut folded, &product) != 0u64:
+                drop(decrement_words(&mut folded))
+            canonical_cyclic_zero(&mut folded)
+            if cyclic <= width:
+                recover_cyclic_tail(&mut residual, &folded, &prefix, &estimate)?
+            else:
+                copy_words(&folded, &mut residual)
+        else:
+            product = multiply(&prefix, &estimate)?
+            drop(subtract_division_words(&mut residual, &product[:width + 1]))
 
         # Lift the reciprocal and add floor(estimate * residual / B^(2l)).
         # Since m <= 2l-1, the new error including rounding is <1+36/B.
@@ -1852,25 +1958,44 @@ def division_reciprocal(v: &[u64], k: i64) -> Result[list[u64], AllocError]:
         divide_blocked_digits(&mut numerator, &prefix, &mut full, inverse_division_word(prefix[-1]), &mut scratch)?
         Ok(full[1:]?)
 
-# Evaluate the correction modulo B^width-1 with a cyclic convolution.
-# The actual nonnegative remainder is smaller than 5v, which fits below
-# the modulus since width is at least one limb longer than the divisor.
+# The nonnegative Barrett correction is below 5*B^n. If the cyclic
+# width C does not cover all n+1 limbs, R = A + t*(B^C-1) for canonical
+# residue A and 0 <= t < B^(n+1-C). Reduce this relation modulo
+# B^(n+1-C) to get t from A and a short product for R's low limbs.
 def subtract_cyclic_product(u: &mut [u64], v: &[u64], q: &[u64], product: &mut [u64], folded: &mut [u64]) -> Result[u64, AllocError]:
     unchecked:
         width = len(product)
-        multiply_transform_wide_into(v, q, product, True)?
-        copy_words(&u[:width], folded)
-        high = len(u) - width
-        if add_division_words(&mut folded[:high], &u[width:]) and increment_words(&mut folded[high:]):
-            drop(increment_words(folded))
-        if subtract_division_words(folded, product) != 0u64:
-            decrement_words(folded)
         n = len(v)
-        if folded[n] == u64.MAX:
-            clear_words(&mut u[:n])
-            return Ok(0u64)
-        copy_words(folded, &mut u[:n])
-        Ok(folded[n])
+        multiply_wraparound(v, q, product)?
+        fold_cyclic(u, folded)
+        if subtract_division_words(folded, product) != 0u64:
+            drop(decrement_words(folded))
+        canonical_cyclic_zero(folded)
+        if width > n:
+            copy_words(folded, &mut u[:n])
+            return Ok(folded[n])
+
+        recover_cyclic_tail(&mut u[:n + 1], folded, v, q)?
+        Ok(u[n])
+
+# The destination initially contains the low limbs of the minuend.
+# With gap <= width, the two moduli B^gap and B^width-1 give the wrap
+# count in the top row. Subtract that count from the cyclic residue
+# and propagate any borrow across the split to reconstruct the integer.
+def recover_cyclic_tail(out: &mut [u64], residue: &[u64], a: &[u64], b: &[u64]) -> Result[(), AllocError]:
+    unchecked:
+        width = len(residue)
+        gap = len(out) - width
+        low = &mut out[:width]
+        top = &mut out[width:]
+        clear_words(top)
+        multiply_low_into(a, b, top)?
+        drop(subtract_division_words(top, &low[:gap]))
+        drop(add_division_words(top, &residue[:gap]))
+        copy_words(residue, low)
+        if subtract_division_words(&mut low[:gap], top) != 0u64 and decrement_words(&mut low[gap:]):
+            drop(decrement_words(top))
+        Ok(())
 
 # H is the high k limbs of the current remainder. The next quotient
 # block is at least floor(H * (B^k + reciprocal) / B^k). Subtract its
