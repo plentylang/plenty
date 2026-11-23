@@ -24,17 +24,26 @@ count=  12, label="one\ntwo"
 ```
 
 To choose storage, pass an allocator when constructing the formatter and again
-when finishing. The result can outlive the formatter.
+when finishing. If a field has a user method and padding, use `format_in`
+to choose storage for the method's spelling too. Padding needs to know how
+wide that spelling is, but the method still runs only once. The same allocator
+can serve all three roles; the result can outlive the formatter.
 
 ```plenty
 import std.alloc as alloc
 import std.fmt as fmt
 
+class Status:
+    name: str
+
+    def display[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        out.text(&self.name)
+
 def main() -> Result[(), fmt.FormatError | IoError]:
     storage = alloc.system()
     mut output = fmt.string_formatter_in(&storage, 80, 8)?
-    label = "ready"
-    output.format(f"label={label!r:>9}")?
+    label = Status("ready")
+    output.format_in(&storage, f"label={label:>7}")?
     message = fmt.finish_in(&storage, &output)?
     drop(output)
     print(message)?
@@ -42,7 +51,7 @@ def main() -> Result[(), fmt.FormatError | IoError]:
 ```
 
 ```output
-label=  "ready"
+label=  ready
 ```
 
 Your type chooses separate display and debug methods. Both can be generic over

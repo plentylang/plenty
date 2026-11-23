@@ -8,6 +8,7 @@ Delivery history and retired backlog entries live here, separate from the
 - [Consuming list storage](completed-work/language-and-tooling.md#consuming-list-storage).
 - [Selected stable-sort workspace](completed-work/language-and-tooling.md#selected-stable-sort-workspace).
 - [List ordering allocation audit](completed-work/language-and-tooling.md#list-ordering-allocation-audit).
+- [Padded user formatting methods can use selected scratch](completed-work/language-and-tooling.md#selected-scratch-for-padded-user-hooks).
 - [Padded quoted fields use the existing formatter](completed-work/language-and-tooling.md#padded-quoted-fields).
 - [F-string field allocation audit](completed-work/language-and-tooling.md#f-string-field-allocation-audit).
 - [Strict and lossy decoding of borrowed byte ranges](completed-work/language-and-tooling.md#decoding-borrowed-byte-ranges).

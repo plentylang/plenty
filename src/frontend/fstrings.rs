@@ -1050,19 +1050,30 @@ fn fnv(text: &str) -> u64 {
     hash
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum HookOutput {
+    Writer,
+    String,
+    SelectedString,
+}
+
 /// The generated function that calls a field's `display` or `debug` method,
 /// one per method, form and field. It is defined in the f-string's
 /// module rather than `std.fmt`, so the method is looked up with that module's
 /// access: a private class formats in its own module, as a direct call would.
-/// With `write`, it writes to the caller's formatter, as `std.fmt.display`
-/// does; otherwise it builds a string, as `std.fmt.to_string` does.
-fn method_symbol(at: &Token, method: &str, write: bool) -> String {
+/// Writer form streams to the caller. String forms stage the spelling with
+/// either the ordinary policy or the selected literal's field allocator.
+fn method_symbol(at: &Token, method: &str, output: HookOutput) -> String {
     let hash = fnv(&at.location());
-    let form = if write { "write" } else { "string" };
+    let form = match output {
+        HookOutput::Writer => "write",
+        HookOutput::String => "string",
+        HookOutput::SelectedString => "string_in",
+    };
     format!("__plenty_fstring_{method}_{form}_{hash:016x}")
 }
 
-fn method_function(symbol: &str, method_name: &str, write: bool, at: &Token) -> Function {
+fn method_function(symbol: &str, method_name: &str, output: HookOutput, at: &Token) -> Function {
     const VALUE: &str = "__plenty_v";
     const VALUE_TYPE: &str = "__plenty_T";
     const WRITER: &str = "__plenty_W";
@@ -1076,7 +1087,7 @@ fn method_function(symbol: &str, method_name: &str, write: bool, at: &Token) -> 
     let mut body = Vec::new();
     // `out` is the formatter itself in the string form, a `&mut` in the
     // write form; method calls reach it either way.
-    let target = if write {
+    let target = if output == HookOutput::Writer {
         type_params.push((WRITER.into(), None));
         inputs.push((
             OUT.into(),
@@ -1085,18 +1096,27 @@ fn method_function(symbol: &str, method_name: &str, write: bool, at: &Token) -> 
         name(at, OUT)
     } else {
         // The limits are literals so they convert to the `NonNegative[i64]`
-        // parameters; the formatting-hook adapter passes only the value.
+        // parameters. Preserve the ordinary staging depth and byte limit.
+        let mut args = vec![number(at, NO_BUDGET), number(at, DEPTH)];
+        let constructor = if output == HookOutput::SelectedString {
+            let allocator = "__plenty_A";
+            type_params.push((allocator.into(), None));
+            inputs.push((
+                SCRATCH.into(),
+                type_ref(at, "&", vec![type_ref(at, allocator, vec![])]),
+            ));
+            args.insert(0, name(at, SCRATCH));
+            "string_formatter_in"
+        } else {
+            "string_formatter"
+        };
         body.push(Stmt {
             at: at.clone(),
             kind: Statement::Assign {
                 name: OUT.into(),
                 mutable: true,
                 annotation: None,
-                value: try_(call(
-                    at,
-                    &fmt("string_formatter"),
-                    vec![number(at, NO_BUDGET), number(at, DEPTH)],
-                )),
+                value: try_(call(at, &fmt(constructor), args)),
             },
         });
         unary(at, "&mut", name(at, OUT))
@@ -1113,7 +1133,7 @@ fn method_function(symbol: &str, method_name: &str, write: bool, at: &Token) -> 
         },
     });
     body.push(statement(method(at, name(at, OUT), "leave", vec![])));
-    let output = if write {
+    let output = if output == HookOutput::Writer {
         body.push(statement(name(at, RESULT)));
         TypeRef {
             concrete: None,
@@ -1124,11 +1144,12 @@ fn method_function(symbol: &str, method_name: &str, write: bool, at: &Token) -> 
         }
     } else {
         body.push(statement(try_(name(at, RESULT))));
-        body.push(statement(call(
-            at,
-            &fmt("finish"),
-            vec![unary(at, "&", name(at, OUT))],
-        )));
+        let out = unary(at, "&", name(at, OUT));
+        body.push(statement(if output == HookOutput::SelectedString {
+            call(at, &fmt("finish_in"), vec![name(at, SCRATCH), out])
+        } else {
+            call(at, &fmt("finish"), vec![out])
+        }));
         type_ref(at, "str", vec![])
     };
     Function {
@@ -1442,10 +1463,15 @@ impl Lower<'_> {
 
     /// The name of the generated function calling `method_name`, registered
     /// on first use; see [`method_symbol`].
-    fn method_caller(&mut self, method_name: &str, write: bool, at: &Token) -> Result<String> {
-        let name = method_symbol(at, method_name, write);
+    fn method_caller(
+        &mut self,
+        method_name: &str,
+        output: HookOutput,
+        at: &Token,
+    ) -> Result<String> {
+        let name = method_symbol(at, method_name, output);
         if !self.generics.templates.contains_key(&name) {
-            let function = method_function(&name, method_name, write, at);
+            let function = method_function(&name, method_name, output, at);
             self.generics.validate_template(&function, self.aliases)?;
             self.generics.retention.keep(&function.body);
             self.generics
@@ -1453,6 +1479,23 @@ impl Lower<'_> {
                 .insert(name.clone(), Arc::new(function));
         }
         Ok(name)
+    }
+
+    /// Lend the single invocation's completed spelling to the layout step.
+    fn hook_spelling(
+        &mut self,
+        method: &str,
+        value: Expr,
+        selected: bool,
+        at: &Token,
+    ) -> Result<Expr> {
+        let (output, args) = if selected {
+            (HookOutput::SelectedString, vec![value, name(at, SCRATCH)])
+        } else {
+            (HookOutput::String, vec![value])
+        };
+        let caller = self.method_caller(method, output, at)?;
+        Ok(unary(at, "&", try_(call(at, &caller, args))))
     }
 
     fn formats_with(&self, ty: &Ty, name: &str, at: &Token) -> Result<bool> {
@@ -1497,7 +1540,7 @@ impl Lower<'_> {
             Some(template) if !top => template.at.clone(),
             _ => at.clone(),
         };
-        let caller = self.method_caller(method, false, &site)?;
+        let caller = self.method_caller(method, HookOutput::String, &site)?;
         let function = self.specialize(&caller, vec![Argument::Type(ty.clone())], &site)?;
         Ok(crate::collection::FormatHook {
             ty: ty.clone(),
@@ -1721,7 +1764,10 @@ impl Lower<'_> {
                 vec![text_value, spec_value(spec)],
             )
         };
-        if selected && field.conversion == Conversion::Ascii {
+        if selected
+            && field.conversion == Conversion::Ascii
+            && !matches!(category, Category::Method)
+        {
             return Err(unsupported());
         }
         if ty == text_view() {
@@ -1734,10 +1780,7 @@ impl Lower<'_> {
             // Python's `ascii()`: the `!r` text with non-ASCII scalars escaped.
             let repr = match category {
                 Category::Text => temporary("debug_string", vec![value]),
-                Category::Method => {
-                    let caller = self.method_caller("debug", false, at)?;
-                    unary(at, "&", try_(call(at, &caller, vec![value])))
-                }
+                Category::Method => self.hook_spelling("debug", value, selected, at)?,
                 _ if hooked => temporary("repr_result", vec![spelled()]),
                 _ => temporary(repr_string, vec![value]),
             };
@@ -1745,7 +1788,12 @@ impl Lower<'_> {
                 None => method(at, out, "ascii_text", vec![repr]),
                 Some(spec) => {
                     spec.check(&Category::Text, &ty, at)?;
-                    padded(temporary("ascii_string", vec![repr]), spec)
+                    let ascii = if selected {
+                        temporary("ascii_string_in", vec![name(at, SCRATCH), repr])
+                    } else {
+                        temporary("ascii_string", vec![repr])
+                    };
+                    padded(ascii, spec)
                 }
             });
         }
@@ -1765,10 +1813,7 @@ impl Lower<'_> {
             _ => Category::Repr,
         };
         // Explicit scratch never routes a field through an ordinary collector.
-        if selected
-            && (matches!(category, Category::Repr)
-                || (matches!(category, Category::Method) && spec.is_some()))
-        {
+        if selected && matches!(category, Category::Repr) {
             return Err(unsupported());
         }
         let repr_text = field.conversion == Conversion::Repr && matches!(ty, Ty::Str);
@@ -1863,7 +1908,7 @@ impl Lower<'_> {
                     vec![scalar(), unary(at, "&", call(at, &fmt("spec"), vec![]))],
                 ),
                 Category::Method => {
-                    let caller = self.method_caller(wanted, true, at)?;
+                    let caller = self.method_caller(wanted, HookOutput::Writer, at)?;
                     call(at, &caller, vec![value, out_mut()])
                 }
                 Category::Repr if hooked => call(at, &fmt("repr_text"), vec![spelled(), out_mut()]),
@@ -1913,10 +1958,7 @@ impl Lower<'_> {
                 if single { "float32_spec" } else { "float_spec" },
                 vec![scalar(), spec_value(spec)],
             ),
-            Category::Method => {
-                let caller = self.method_caller(wanted, false, at)?;
-                padded(unary(at, "&", try_(call(at, &caller, vec![value]))), spec)
-            }
+            Category::Method => padded(self.hook_spelling(wanted, value, selected, at)?, spec),
             Category::Repr if hooked => padded(temporary("repr_result", vec![spelled()]), spec),
             Category::Repr => padded(temporary(repr_string, vec![value]), spec),
         }))

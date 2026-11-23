@@ -228,10 +228,11 @@ pub def display[W](self, out: &mut Formatter[W]) -> Result[(), FormatError]:
 
 The argument must be an f-string literal; the compiler lowers the pair to
 calls on `out`, so `out`'s byte budget, depth limit, and partial-progress rules
-apply, and its scratch is reused. A field that needs a temporary string (a
-spec on a value without a built-in spelling, `!r` on `str` with a spec, `!a`)
-still allocates one. `format` is not an ordinary method of `Formatter`: it has
-no other form, and a user type's own `format` method is unaffected.
+apply, and its scratch is reused. A field can still need a separate temporary
+string, for example when laying out a user method's output. Use
+[`out.format_in(&scratch, f"...")`](../../stdlib/fmt.md#select-scratch-for-a-user-formatting-method)
+to select storage for that spelling without changing the destination. Both
+forms require literal templates; a user type's methods are unaffected.
 
 ## Cost and failure
 

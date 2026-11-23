@@ -31,6 +31,10 @@ Verified destination-only growth and refusal for `extend`, and selected range tr
 
 The [allocation inventory](../design/toolchain/02-architecture/allocation-sites.md#list-ordering-result-versus-workspace) distinguishes the copied result of `sorted` from the workspace of in-place stable sorting and any allocations inside a key callback. No API changed.
 
+### Selected scratch for padded user hooks
+
+[`Formatter.format_in`](../design/stdlib/fmt.md#select-scratch-for-a-user-formatting-method) selects field scratch independently of the destination. A padded `display` or `debug` runs once into selected storage, including the temporary spelling for `!a`. Existing output limits, progress and ordinary actor formatting are unchanged. This does not select storage inside the user's method or migrate aggregate representation.
+
 ### Padded quoted fields
 
 Plain quoted text with a format spec writes to the existing formatter without building a second cursor or materializing the field string. Width and precision count the escaped spelling's scalars. Hook rendering is unchanged.
