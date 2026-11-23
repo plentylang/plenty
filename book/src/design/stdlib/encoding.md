@@ -53,6 +53,7 @@ buffer. Decoders read the selected UTF-8 bytes and return owned output.
 | `hex_decode(source)` | `Result[Bytes, EncodingError]` | Digits of either case; even length |
 | `base64_encode(source)` | `Result[Bytes, EncodingError]` | RFC 4648 section 4, padded |
 | `append_base64(target: &mut Bytes, source)` | `Result[(), EncodingError]` | Append padded Base64 directly; size overflow or growth refusal leaves the original length and bytes intact. |
+| `base64_decode_append(source: &[u8], target: &mut Bytes)` | `Result[(), EncodingError]` | Append decoded standard padded Base64, preserving existing bytes and capacity on failure. |
 | `base64_decode(source)` | `Result[Bytes, EncodingError]` | The padded form only |
 | `base64url_encode(source)` | `Result[Bytes, EncodingError]` | RFC 4648 section 5, unpadded |
 | `base64url_decode(source)` | `Result[Bytes, EncodingError]` | The unpadded form only |
@@ -210,7 +211,7 @@ stage those bytes even when the final `str` fits inline (up to seven bytes).
 For selected **final text** you can call `base64_encode` and then
 `out.decode_text(&encoded)`; this selects only the non-inline string, not
 `encoded`. Likewise, [`out.slice_bytes(&decoded)`](alloc.md#copy-a-byte-slice-into-packed-storage)
-selects a second copy, not the decoder's result allocation. For standard padded encoding, `append_base64` instead reserves the whole suffix on the destination before writing. It needs no encoded temporary and makes no storage request within capacity. The decoders still return a separate buffer. See the [Base64 allocation trace](../toolchain/02-architecture/allocation-sites.md#base64-packed-result-or-text-staging).
+selects a second copy, not the decoder's result allocation. For standard padded encoding, `append_base64` instead reserves the whole suffix on the destination before writing. It needs no encoded temporary and makes no storage request within capacity. `base64_decode_append` instead decodes directly into spare capacity, restoring the original length on invalid input. When space is insufficient it validates before reserving, then decodes. Malformed input makes no allocator request in either case. See the [Base64 allocation trace](../toolchain/02-architecture/allocation-sites.md#base64-packed-result-or-text-staging).
 
 Every byte goes through a checked single-element `Bytes` call. Measured with a
 release compiler on x86-64 Linux, pinned to one core, on an 8,388,608-byte

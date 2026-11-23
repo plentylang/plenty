@@ -34,17 +34,14 @@ This trace excludes MIME wrapping, PEM and custom alphabets.
 
 `append_base64` differs from the returning codecs: it checks the padded size, reserves the entire suffix on the existing destination and emits directly. Empty or already-reserved output needs no new allocation. `Allocator.bytes_with_capacity(n)` constructs an empty selected owner and reserves its backing through that owner; refusal releases provisional storage.
 
-**Caller example for a possible destination decoder (not an API):** a buffer
-contains `H:` and has capacity 2. Appending the decoded bytes of `aGVsbG8=`
-would produce `H:hello`. Changing the last data symbol to `9` gives `aGVsbG9=`:
-its unused bits are nonzero, so decoding should report `NonCanonical(6)`.
-Reserving before checking those bits can grow the buffer or report allocation
-failure instead. Truncating on rejection restores the prefix but cannot undo
-the capacity change or the allocator callback. For a reusable destination,
-prefer validating before requesting growth: malformed input then changes
-neither content nor capacity and makes no allocator call. The cost on valid
-input needing growth is another scan; no second output owner is necessary.
-This recommendation does not change the ordinary returning decoder.
+For `base64_decode_append(source, &mut target)`, a target containing `H:`
+receives `hello` from `aGVsbG8=`. With spare capacity the decoder writes in
+one pass and truncates back to the original length on a late error.
+With insufficient capacity it validates all input before requesting growth.
+Thus `aGVsbG9=` reports `NonCanonical(6)` without an allocator request or
+change to bytes, length or capacity. Only valid input that needs growth is
+scanned twice. The ordinary returning decoder still reserves before validation
+of the symbols.
 
 One logical `Bytes` is not one allocation. `std.bytes.with_capacity` calls
 `__bytes_new`; opcode 170 in `plenty-runtime/src/aggregates/byte_storage.rs`
