@@ -288,6 +288,32 @@ def main() -> Result[(), AllocError | IoError]:
 [[1], [2]]
 ```
 
+## Move dictionary keys into selected storage
+
+Iterating an owned dictionary yields its keys in insertion order. Reserve before
+the loop so a failure drops the intact input. Use `for key in rows`, not
+`rows.keys()`: the latter borrows the keys rather than transferring them.
+
+```plenty
+import std.alloc as alloc
+
+def labels(out: &alloc.Allocator, rows: dict[str, i64]) -> Result[list[str], AllocError]:
+    mut result = out.list_with_capacity[str](len(rows))?
+    for key in rows:
+        result.append(key)?
+    Ok(result)
+
+def main() -> Result[(), AllocError | IoError]:
+    out = alloc.system()
+    print(labels(&out, {"west": 2, "east": 1}?)?)?
+    Ok(())
+```
+```output
+["west", "east"]
+```
+
+For values, use [`out.into_values(rows)?`](#keep-dictionary-values-in-insertion-order) to transfer directly into a selected list. The ordinary `rows.into_values()?` builds a system-backed list.
+
 ## Select stable-sort workspace
 
 To keep equal-key rows in input order, lend the rows and select only the

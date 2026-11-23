@@ -11,6 +11,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 Issue #1014 extends the [submitting-worker wait rule](../design/facilities/03-concurrency/executors.md) to allocator callbacks and registered state destruction. The check matches coordination types rather than allocator instances; it does not ban all custom allocation on pool workers.
 
+### Dictionary key transfer
+
+Verified insertion order and exactly-once cleanup when consuming an owned dictionary into a selected key list, including refusal before transfer. No new key API is needed.
+
 ### Selected dictionary values
 
 `Allocator.into_values` consumes a dictionary into a selected list in insertion order. Reservation failure consumes the intact source; success transfers values without changing their backing.

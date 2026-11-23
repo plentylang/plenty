@@ -188,6 +188,8 @@ and exercises the native opcode with a finite-set descriptor.
 view and a direct `keys()` projection, including a scoped worker, provider
 failure and growth after the source and allocator handle are dropped.
 
+**Consuming into selected storage.** For keys, reserve `len(d)` slots with `out.list_with_capacity[K]` and append each key from `for key in d` (owned dictionary, not a view). No ordinary key snapshot is needed. Values drop with the source; if reservation fails in a function taking the dictionary by value, all its keys and values drop.
+
 `out.into_values(d)` uses `ALLOCATOR_INTO_VALUES` to run the same reservation and insertion-order transfer as ordinary `into_values`, with `CopyDestination::Selected` for the result list. No scratch list or nested copy is needed. The wrapper owns the dictionary and drops it on every exit.
 
 ## Consuming a list: destination growth versus new storage
