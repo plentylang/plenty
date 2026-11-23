@@ -88,7 +88,7 @@ transforms reuse fixed scratch and computed twiddle tables. At 65,536 bits per
 operand, the transform length is 1,024, compared with 8,192 for the former
 16-bit path and 4,096 for the intermediate 32-bit path.
 The NTT requires both operands to have at least 1,024 limbs, a size ratio at
-most 2:1, at least seven-eighths transform occupancy, and at most 524,288
+most 2:1, at least five-eighths transform occupancy, and at most 524,288
 combined limbs. Occupancy uses the actual digit counts, rounding each operand's
 limb count up to a pair, including padding for odd limb counts. The primes'
 2⁴⁰ transform order exceeds this retained cap. Other shapes use Toom-3,
@@ -98,27 +98,42 @@ Karatsuba and Toom-3 borrow operand limb views and write
 their low and high products (the evaluations at 0 and infinity) directly into
 disjoint regions of the final output, avoiding two owned recursive product
 arrays. Evaluation and interpolation scratch remains fallibly allocated.
-Division by a multiword divisor uses Knuth's Algorithm D on the stored
+The base case for multiword division uses Knuth's Algorithm D on the stored
 64-bit limbs. It shifts the divisor so its top bit is set, then reuses one
 reciprocal of the leading limb to estimate each quotient digit. It subtracts
 the trial quotient product in place, computing the borrow bits with
 word arithmetic. Whole zero limbs at the low end of the divisor can be
 skipped, with the corresponding dividend limbs carried into the remainder.
 Division by a single word retains its short-division path.
-Long division remains quadratic for balanced operands. Rendering caches
-prepared divisors across splits that use the same radix power. Parsing and
-non-power-of-two rendering split digit ranges recursively and share radix
-powers within a conversion. The renderer bounds the digit count from the bit
-length, compares against one exact radix power if those bounds straddle the
-cap, and writes
-ASCII digits into a shared buffer. At the leaves, short division by a
+Large balanced divisions process quotient blocks recursively. Each block
+divides by the high half of the divisor and uses a multiplication by the
+omitted low half to correct its estimate. This gives subquadratic division
+when both operand shapes can use subquadratic multiplication.
+
+Parsing validates the full input before allocating limb storage. Leading
+zeros count toward the digit cap and are skipped during construction.
+Bases 2, 4, 8, 16, and 32 pack digit bits directly into limbs. Other bases
+build a limb buffer by multiplying and adding groups of digits that fit in
+one word. Large inputs split recursively and share the radix power at each
+depth. Values in the signed 64-bit range are stored inline.
+
+Non-power-of-two rendering also uses one split exponent per depth and
+caches the normalized divisors. For qualifying repeated
+splits, it also caches a multi-limb Barrett reciprocal. An estimate from the
+high remainder limbs is corrected with a shorter cyclic transform of the
+quotient times the divisor. The division and transform cutoffs depend on
+the significant limb counts after removing whole zero low limbs.
+
+The renderer bounds the digit count from the bit length, compares against
+one exact radix power if those bounds straddle the cap, and writes ASCII
+digits into a shared buffer. At the leaves, short division by a
 one-word radix power extracts several characters at a time. Each render
 computes its chunk divisor's reciprocal once. Decimal chunks contain 19
 digits. Bases 2, 4, 8, 16, and 32 extract bit groups directly. Single-word
-rendering uses scalar division without a power cache. Conversion scratch allocations are fallible.
-Truncated vector transforms and specialized squaring are not implemented.
-No native multiplication kernel is used, and crossover choices are implementation
-details, not performance promises.
+rendering uses scalar division without a power cache. Conversion scratch
+allocations are fallible. Large radix-power squares reuse a single forward
+transform. General multiplication uses the two-operand transform.
+The crossovers between implementations depend on operand size and shape.
 
 Text conversion has explicit digit caps. Formatting through `display[W](out:
 &mut Formatter[W]) -> Result[(), FormatError]` uses decimal with the default
@@ -156,6 +171,7 @@ numeric carry bit, not a mode selection.
 - Peter L. Montgomery, [Modular multiplication without trial division](https://doi.org/10.1090/S0025-5718-1985-0777282-X):
   exact modular arithmetic for transform residues, roots and products.
 - [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
-  bit-length sizing, direct power-of-two rendering, grouped short division and
-  normalized leading-limb reciprocals. This is an independent Plenty
-  implementation.
+  bit-length sizing, direct bit packing and extraction, grouped digit
+  conversion, radix-power squaring, recursive quotient blocks, and reuse of
+  Barrett reciprocals with cyclic correction products. This is an independent
+  Plenty implementation.

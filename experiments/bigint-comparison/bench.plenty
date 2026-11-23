@@ -1,14 +1,21 @@
-from std.bigint import BigIntError, parse
+from std.bigint import BigInt, BigIntError, parse
 from std.fmt import FormatError
 from std.time import monotonic_now
+
+# @PATH lets the same harness measure operands beyond the OS argument limit.
+def operand(text: str) -> Result[BigInt, AllocError | BigIntError | IoError]:
+    if text.startswith("@"):
+        return parse(read_text(text[1:]?)?, 16, 1000000)
+    parse(text, 16, 1000000)
 
 def main() -> Result[(), AllocError | BigIntError | IoError | FormatError | ParseError | OverflowError[u64]]:
     argv = args()?
     op = argv[1]
-    a = parse(argv[2], 16, 100000)?
-    b = parse(argv[3], 16, 100000)?
+    a = operand(argv[2])?
+    b = operand(argv[3])?
     count = i64.parse(argv[4])?
-    text = a.to_string(10, 100000)?
+    radix = i64.parse(argv[5])? if len(argv) > 5 else 10
+    text = a.to_string(radix, 1000000)? if op == "parse" else ""
     mut checksum: u64 = 0
     start = monotonic_now()
     if op == "add":
@@ -23,10 +30,10 @@ def main() -> Result[(), AllocError | BigIntError | IoError | FormatError | Pars
             checksum += u64(q.bit_length())
     elif op == "parse":
         for _ in range(count):
-            checksum += u64(parse(&text, 10, 100000)?.bit_length())
+            checksum += u64(parse(&text, radix, 1000000)?.bit_length())
     elif op == "render":
         for _ in range(count):
-            checksum += u64(len(a.to_string(10, 100000)?))
+            checksum += u64(len(a.to_string(radix, 1000000)?))
     else:
         return Err(ParseError.Invalid)
     elapsed = monotonic_now().saturating_duration_since(&start).as_nanoseconds()

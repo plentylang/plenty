@@ -108,6 +108,10 @@ pub class Allocator:
             case Err(error):
                 Err(BoxError[T].Allocation(content, error))
 
+    pub def into_values[K: KeyType, V](self, source: dict[K, V]) -> Result[list[V], AllocError]:
+        mut owned = source
+        __allocator_into_values[dict[K, V]](self._handle, &mut owned)
+
     pub def list[T](self, source: Generator[T]) -> Result[list[T], AllocError]:
         mut output = self.empty_list[T]()?
         for value in source:

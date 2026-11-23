@@ -155,6 +155,85 @@ fn every_radix_round_trips_and_float_rounding_is_exact() {
 }
 
 #[test]
+fn radix_parsing_preserves_word_boundaries_and_leading_zero_caps() {
+    let mut body = String::new();
+    let mut expected = String::new();
+    for radix in [2u128, 3, 4, 8, 10, 12, 16, 24, 32, 36] {
+        for n in [
+            1 << 63,
+            u128::from(u64::MAX),
+            1 << 64,
+            (1 << 65) + 3,
+            u128::MAX,
+        ] {
+            let mut remaining = n;
+            let mut reversed = Vec::new();
+            while remaining != 0 {
+                let digit = b"0123456789abcdefghijklmnopqrstuvwxyz"[(remaining % radix) as usize];
+                reversed.push(if reversed.len() % 2 == 0 {
+                    digit.to_ascii_uppercase()
+                } else {
+                    digit
+                });
+                remaining /= radix;
+            }
+            reversed.reverse();
+            let digits = String::from_utf8(reversed).unwrap();
+            let width = digits.len() + 3;
+            body.push_str(&format!(
+                concat!(
+                    r#"    print(parse("+000{digits}", {radix}, {width})?, parse("-000{digits}", {radix}, {width})?)?"#,
+                    "\n"
+                ),
+                digits = digits,
+                radix = radix,
+                width = width,
+            ));
+            expected.push_str(&format!("{n} -{n}\n"));
+        }
+    }
+    body.push_str(
+        r#"    match parse("-000001", 2, 5):
+        case Err(BigIntError.LimitExceeded):
+            print("limit")?
+        case _:
+            print("wrong result")?
+    match parse("+00000ａ", 16, 16):
+        case Err(BigIntError.InvalidDigit):
+            print("invalid digit")?
+        case _:
+            print("wrong result")?
+    print(parse("-0000000000000000000000000000", 3)? == from_i64(0))?
+"#,
+    );
+    expected.push_str("limit\ninvalid digit\nTrue\n");
+    assert_eq!(run(&body, false), expected);
+    assert_eq!(run(&body, true), expected);
+}
+
+#[test]
+fn large_radix_parsing_matches_independent_power_expansion() {
+    let body = r#"    # 36^120001 - 1 has 120001 digits, including mixed letter case.
+    text = ("-" + ("Zz".repeat(60000)? + "Z")?)?
+    parsed = parse(text, 36, 120001)?
+    # Form the expected value from the public multiplication operator,
+    # which does not use the parser's radix powers or squaring path.
+    mut power = from_i64(36)
+    mut expected = from_i64(1)
+    mut exponent = 120001
+    while exponent > 0:
+        if exponent & 1 != 0:
+            expected = (expected * power)?
+        exponent = exponent // 2
+        if exponent != 0:
+            power = (power * power)?
+    print((parsed + expected)? == from_i64(1))?
+"#;
+    assert_eq!(run(body, false), "True\n");
+    assert_eq!(run(body, true), "True\n");
+}
+
+#[test]
 fn radix_rendering_preserves_exact_caps_and_internal_zeroes() {
     let mut source = String::from(
         r#"from std.bigint import BigIntError, parse
@@ -264,6 +343,41 @@ def main() -> Result[(), AllocError | BigIntError | IoError]:
     let expected = "True True True True\n".repeat(5);
     assert_eq!(run_program(source, false), expected);
     assert_eq!(run_program(source, true), expected);
+}
+
+#[test]
+fn recursive_division_handles_a_saturated_quotient_block() {
+    let body = r#"    one = from_i64(1)
+    divisor = ((one << 131071)? + one)?
+    block = (one << 65536)?
+    # The initial remainder is one below the divisor. Its high half
+    # matches the divisor's, so the recursive trial block saturates.
+    a = (((divisor << 65536)?) - one)?
+    (q, r) = a.checked_divmod(&divisor)?
+    print(q == (block - one)?, r == (divisor - one)?)?
+    negative = (-a)?
+    (floor, modulus) = negative.checked_divmod(&divisor)?
+    print(floor == (-block)?, modulus == one)?
+"#;
+    assert_eq!(run(body, false), "True True\nTrue True\n");
+    assert_eq!(run(body, true), "True True\nTrue True\n");
+}
+
+#[test]
+fn decimal_render_reuses_a_large_split_power_at_the_exact_cap() {
+    let body = r#"    text = "98765432101234567890".repeat(15800)?
+    value = parse(text, 10, 316000)?
+    negative = (-value)?
+    signed = ("-" + text)?
+    print(negative.to_string(10, 316000)? == signed)?
+    match value.to_string(10, 315999):
+        case Err(BigIntError.LimitExceeded):
+            print("limit")?
+        case _:
+            print("wrong result")?
+"#;
+    assert_eq!(run(body, false), "True\nlimit\n");
+    assert_eq!(run(body, true), "True\nlimit\n");
 }
 
 #[test]
@@ -526,21 +640,27 @@ fn allocation_failures_propagate_and_inline_arithmetic_does_not_allocate() {
     shifted = (a << 2)?
     right = (b >> 5)?
     bits = (a ^ b)?
+    inline_parsing = parse("-9223372036854775808")
+    zero_parsing = parse("+0000000000000000000000000000", 16)
     print("__test_end_no_allocations__")?
     addition = large + from_i64(1)
     multiplication = large * large
     division = large.checked_divmod(&from_i64(3))
     parsing = parse("18446744073709551616")
+    packed = parse("10000000000000000", 16)
     rendering = large.to_string()
     assignment = destination.add_assign(&large)
     print("__test_restore_allocations__")?
     print(sum, difference, product, quotient, remainder, shifted, right, bits)?
-    print(addition.is_err(), multiplication.is_err(), division.is_err(), parsing.is_err(), rendering.is_err(), assignment.is_err(), destination == large)?
+    print(inline_parsing? == from_i64(i64.MIN), zero_parsing? == from_i64(0))?
+    print(addition.is_err(), multiplication.is_err(), division.is_err(), parsing.is_err(), packed.is_err(), rendering.is_err(), assignment.is_err(), destination == large)?
 "#,
         false,
     );
     assert!(
-        output.ends_with("34 48 -287 -6 -1 164 -1 -48\nTrue True True True True True True\n"),
+        output.ends_with(
+            "34 48 -287 -6 -1 164 -1 -48\nTrue True\nTrue True True True True True True True\n"
+        ),
         "{output}"
     );
 }

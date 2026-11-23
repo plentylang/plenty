@@ -312,9 +312,7 @@ def main() -> Result[(), AllocError | IoError]:
 ["west", "east"]
 ```
 
-For values, `rows.into_values()?` transfers the elements but builds a
-system-backed list. Extending a selected list with that list does not avoid
-the intermediate allocation.
+For values, use [`out.into_values(rows)?`](#keep-dictionary-values-in-insertion-order) to transfer directly into a selected list. The ordinary `rows.into_values()?` builds a system-backed list.
 
 ## Select stable-sort workspace
 
@@ -336,6 +334,24 @@ def main() -> Result[(), AllocError | IoError]:
 
 ```output
 [(1, "low"), (2, "first"), (2, "last")]
+```
+
+## Keep dictionary values in insertion order
+
+Use `out.into_values(rows)` when you need the values but not their keys.
+Only the new outer list uses `out`; the inner lists move without copying.
+
+```plenty
+import std.alloc as alloc
+
+def main() -> Result[(), AllocError | IoError]:
+    rows = {"west": [2]?, "east": [1]?}?
+    out = alloc.system()
+    print(out.into_values(rows)?)?
+    Ok(())
+```
+```output
+[[2], [1]]
 ```
 
 ## Keep part of a byte frame

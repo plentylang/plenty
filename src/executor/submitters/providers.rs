@@ -85,6 +85,7 @@ impl Callbacks {
             }
             Ty::ByteStorage => has(ALLOCATOR_BYTES_SLICE),
             Ty::Box(_) => has(ALLOCATOR_BOX) || has(ALLOCATOR_COPY) || has(ALLOCATOR_LIST_SLICE),
+            Ty::List(_) if has(ALLOCATOR_INTO_VALUES) => true,
             Ty::List(t) if **t == Ty::Str && split => true,
             Ty::List(_) | Ty::Dict(..) | Ty::Set(_) => self.producers.iter().any(|&c| {
                 matches!(
@@ -124,7 +125,7 @@ impl Callbacks {
                     ALLOCATOR_BLOCK_RELEASE => release = true,
                     ALLOCATOR_LIST
                     | ALLOCATOR_BLOCK
-                    | ALLOCATOR_REGISTER..=ALLOCATOR_TEXT_QUOTE => {
+                    | ALLOCATOR_REGISTER..=ALLOCATOR_INTO_VALUES => {
                         alloc = true;
                         release = true;
                     }

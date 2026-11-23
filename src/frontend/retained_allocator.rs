@@ -90,6 +90,27 @@ impl Lower<'_> {
                     Some(element),
                 )
             }
+            "__allocator_into_values" => {
+                let [dictionary] = types else {
+                    return Err(at.error("allocator into_values requires a dictionary type"));
+                };
+                let Some(dictionary @ Ty::Dict(..)) = dictionary.resolve(self.aliases)? else {
+                    return Err(at.error("allocator into_values requires a dictionary type"));
+                };
+                let Ty::Dict(_, value) = &dictionary else {
+                    unreachable!()
+                };
+                if !value.heap_storable() || crate::boxed::erasure_barrier(value) {
+                    return Err(at.error(format!("allocator lists cannot store `{value}`: borrowed or hidden task/channel ownership is unsupported")));
+                }
+                let list = Ty::List(value.clone());
+                (
+                    code::ALLOCATOR_INTO_VALUES,
+                    vec![handle, Ty::Ref(Arc::new(dictionary), true)],
+                    Some(crate::sum::result(list.clone(), crate::sum::alloc_error())),
+                    Some(list),
+                )
+            }
             "__allocator_box" => {
                 let [element] = types else {
                     return Err(at.error("allocator box requires one element type"));

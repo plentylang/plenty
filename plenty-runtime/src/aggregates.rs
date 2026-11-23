@@ -2552,9 +2552,10 @@ unsafe fn try_dictionary_snapshot(
     source: &mut Collection,
     ty: &'static Type,
     values: bool,
+    destination: CopyDestination<'_>,
 ) -> Result<u128, AllocError> {
     unsafe {
-        let result = try_collection_new(ty, source.entries.len())?;
+        let result = destination.collection(ty, source.entries.len())?;
         let element = ty.key();
         let mut cursor = source.entries.first();
         while let Some(index) = cursor {
@@ -3483,7 +3484,7 @@ operation_entries! {
     125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 166 167 366 510 511 580 581 582
     583 584 585 590 591 592 593 594 595 596 597 598 599 600 601 602 603 606 608 609 612
     613 614 615 616
-    650 651 652 653 654 655 656 657 658 659 660 661 662 663 664 665 666 667 668 669 670 671 672 673 674 675 676 677 678 679 680
+    650 651 652 653 654 655 656 657 658 659 660 661 662 663 664 665 666 667 668 669 670 671 672 673 674 675 676 677 678 679 680 681
 }
 // Checked UTF-8 range forms of existing text builtins (original opcode +1000).
 operation_entries! {
@@ -3602,6 +3603,7 @@ pub(crate) unsafe fn operation(
         if matches!(
             op,
             ALLOCATOR_COPY
+                | ALLOCATOR_INTO_VALUES
                 | ALLOCATOR_KEY_VIEW_TO_SET
                 | ALLOCATOR_LIST_SLICE
                 | ALLOCATOR_BYTES_SLICE
@@ -3898,6 +3900,15 @@ pub(crate) unsafe fn collection_at(
             return fallible(try_text_pieces_in(
                 text_views::text(b).split(separator),
                 &*descriptor,
+                CopyDestination::Selected(&allocator),
+            ));
+        }
+        if op == ALLOCATOR_INTO_VALUES {
+            let allocator = crate::allocator::bindings::borrow_handle(a);
+            return fallible(try_dictionary_snapshot(
+                &mut *(b as *mut Collection),
+                &*descriptor,
+                true,
                 CopyDestination::Selected(&allocator),
             ));
         }
@@ -4552,7 +4563,12 @@ pub(crate) unsafe fn collection_at(
             43 | 44 => {
                 // Result[list[element], AllocError] carries the snapshot layout.
                 let ty = (*descriptor).variants[0].fields[0];
-                match try_dictionary_snapshot(&mut *(a as *mut Collection), ty, op == 44) {
+                match try_dictionary_snapshot(
+                    &mut *(a as *mut Collection),
+                    ty,
+                    op == 44,
+                    CopyDestination::Ordinary,
+                ) {
                     Ok(list) => wrap(list, 0),
                     Err(error) => wrap(wrap(0, error as u64), 1),
                 }

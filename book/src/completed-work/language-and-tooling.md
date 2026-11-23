@@ -13,7 +13,11 @@ Issue #1014 extends the [submitting-worker wait rule](../design/facilities/03-co
 
 ### Dictionary key transfer
 
-Verified insertion order and exactly-once cleanup when consuming an owned dictionary into a selected key list, including refusal before transfer. No new key API is needed. The ordinary consuming value snapshot still requires a system-backed list.
+Verified insertion order and exactly-once cleanup when consuming an owned dictionary into a selected key list, including refusal before transfer. No new key API is needed.
+
+### Selected dictionary values
+
+`Allocator.into_values` consumes a dictionary into a selected list in insertion order. Reservation failure consumes the intact source; success transfers values without changing their backing.
 
 ### Consuming list storage
 
