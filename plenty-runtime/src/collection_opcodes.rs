@@ -56,6 +56,8 @@ pub const ALLOCATOR_TEXT_SPLIT_WHITESPACE: i64 = 678;
 pub const ALLOCATOR_TEXT_SPLITLINES: i64 = 679;
 /// Quote plain borrowed text directly into selected storage.
 pub const ALLOCATOR_TEXT_QUOTE: i64 = 680;
+/// Consume dictionary values into a selected list; descriptor is list[V].
+pub const ALLOCATOR_INTO_VALUES: i64 = 681;
 
 pub const SET_IS_SUBSET: i64 = 62;
 pub const SET_IS_SUPERSET: i64 = 63;

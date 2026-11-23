@@ -188,6 +188,8 @@ and exercises the native opcode with a finite-set descriptor.
 view and a direct `keys()` projection, including a scoped worker, provider
 failure and growth after the source and allocator handle are dropped.
 
+`out.into_values(d)` uses `ALLOCATOR_INTO_VALUES` to run the same reservation and insertion-order transfer as ordinary `into_values`, with `CopyDestination::Selected` for the result list. No scratch list or nested copy is needed. The wrapper owns the dictionary and drops it on every exit.
+
 ## Consuming a list: destination growth versus new storage
 
 - `dst.extend(src)`: `Collection::try_extend` reserves the additional row count against **dst** before appending entries. Sufficient capacity means zero requests. Refusal consumes and drops the entire source but leaves the destination unchanged. The source releases its own list storage; transferred fields retain their backing. No merge scratch or independent result.

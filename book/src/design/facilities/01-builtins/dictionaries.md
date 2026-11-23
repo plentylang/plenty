@@ -319,6 +319,8 @@ or owned expression directly, including dictionaries with affine payloads.
 They preserve insertion order and transfer the selected elements without copying.
 The dictionary is consumed on success and failure. Output reservation happens
 before any transfer; allocation failure drops the remaining source exactly once.
+To choose the output allocator, use [`out.into_values(dictionary)`](../../stdlib/alloc.md#consume-dictionary-values). It transfers the same values in the same order without an intermediate list.
+
 Use `for value in dictionary.into_values()?:` when the dictionary is no longer
 needed. This is an owned snapshot, not a stored borrowed view.
 

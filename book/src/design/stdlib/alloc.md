@@ -86,6 +86,10 @@ for invalid configuration rather than requiring a prevalidated integer domain.
 | `Allocator.empty_list[T](self) -> Result[list[T], AllocError]` | Borrows the allocator and creates an empty builtin list with zero row capacity. Object and bookkeeping storage still allocate. |
 | `Allocator.list_with_capacity[T](self, capacity: i64) -> Result[list[T], AllocError]` | Borrows the allocator and creates an empty builtin list with at least the requested element capacity. Zero is valid; negative or unrepresentable capacity returns `CapacityOverflow`. |
 
+### Consume dictionary values
+
+`out.into_values(source)` consumes an owned dictionary and returns `Result[list[V], AllocError]`. It reserves the result in `out` before transferring values in insertion order. Only the outer list uses `out`; the values keep their backing. On refusal, the provider error is returned without retry and the dictionary drops all keys and values. On success, only the keys drop with the dictionary. Use `source.into_values()` for the ordinary system-backed result.
+
 ### Select stable-sort workspace
 
 `workspace.sort_stable_by_key(&mut rows, key, descending=False)` sorts a list or exclusive slice view in place. Ordered input needs no allocation; otherwise the sort requests one temporary block from `workspace` before moving rows. Refusal leaves rows unchanged, with no fallback. The key may already have run. A key returning `Result[K, E]` adds `E` to the allocation error type and may fail after some rows have moved. The block is released before return. Neither the row owner nor allocations inside the key change policy.
