@@ -6,6 +6,24 @@ Each retains the selected allocator for its own storage, so growth and cleanup
 do not require the caller to keep the allocator handle. This is not comprehensive allocation control; see the
 [remaining B13 scope](../../backlog.md#b13-explicit-allocator-implementation-sequence).
 
+## Choose storage for a task
+
+Start with the ordinary operation. You don't need an allocator argument to
+append to a list or grow a byte buffer: the destination already owns its
+storage. Choose a different allocator only for the storage you want to control.
+
+| Task | Where to choose |
+| --- | --- |
+| Grow a collection | Use `list[i64].with_capacity(n)?` for ordinary storage or `out.list_with_capacity[i64](n)?` for selected storage. After that, use the same `append` or `extend`. Moving elements doesn't move their nested backing. |
+| Assemble bytes | Create a [`Bytes` buffer](bytes.md) once. Use `std.bytes.with_capacity(n)?` for ordinary storage or `out.bytes_with_capacity(n)?` for selected storage. Both start empty; zero capacity is valid. Both support the same operations, including [appending standard padded Base64](encoding.md#codecs). Writes within capacity need no growth; when growth is needed the destination's allocator can refuse. There is no automatic system retry. |
+| Return a separate value | Consult the operation that creates it. For example, [Base64 encoding](encoding.md) returns ordinary bytes even if its input is selected. Copying those bytes into a selected buffer does not avoid the intermediate. |
+| Choose temporary storage | A stable sort can use [selected merge workspace](#select-stable-sort-workspace) without changing the list's storage or the key function's allocations. For [collected formatting](fmt.md#select-storage-for-collected-text), choose collector buffers at construction, field temporaries at `format_in`, and the returned string at `finish_in`. Select just the roles you need. |
+
+A growable buffer is not a promise that a whole operation is atomic. Check
+the operation's error contract: reserving room before appending can avoid a
+failure partway through a message; a writer may already have sent a prefix.
+A refused `finish_in` leaves the formatter available for another finish.
+
 This module also provides validated memory-layout requests and affine
 zero-initialized byte blocks with checked access and disjoint splitting. These
 are safe allocator backing types for custom policies: no raw pointers escape,

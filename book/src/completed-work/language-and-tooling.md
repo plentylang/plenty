@@ -7,6 +7,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Storage selection guide
+
+[Choose storage for a task](../design/stdlib/alloc.md#choose-storage-for-a-task) links ordinary list, byte-buffer and formatting operations to the point where the caller chooses storage.
+
 ### Selected nested debug methods
 
 [`Formatter.format_in`](../design/stdlib/fmt.md#select-structural-field-scratch)
