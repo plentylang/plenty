@@ -187,7 +187,7 @@ pub class Allocator:
     pub def replace_bytes(self, source: &[u8], old: &[u8], replacement: &[u8]) -> Result[Bytes, AllocError]:
         # Grow the result through checked byte-buffer operations. Even an empty
         # needle consumes a byte between insertions, so the loop always advances.
-        mut result = self.slice_bytes(b"")?
+        mut result = self.bytes_with_capacity(0)?
         if len(old) == 0:
             result.extend(replacement)?
             for at in range(len(source)):
@@ -260,8 +260,7 @@ pub class Allocator:
                 if part_size > i64.MAX - size:
                     return Err(AllocError.CapacityOverflow)
                 size += part_size
-        mut result = self.slice_bytes(b"")?
-        result.reserve(size)?
+        mut result = self.bytes_with_capacity(size)?
         first = True
         for part in parts:
             if not first:
@@ -279,7 +278,7 @@ pub class Allocator:
         __allocator_text_finish(self._handle, source, True)
 
     pub def join_text_stream(self, separator: &strview, source: Generator[str]) -> Result[str, AllocError]:
-        mut scratch = self.slice_bytes(b"")?
+        mut scratch = self.bytes_with_capacity(0)?
         mut first = True
         for piece in source:
             if not first:
