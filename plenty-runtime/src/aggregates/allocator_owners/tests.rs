@@ -54,6 +54,7 @@ static INTEGER: Type = Type {
     transparent: false,
     debug: None,
     display: None,
+    selected_debug: None,
     quantity: None,
     finite: None,
     destroy: None,

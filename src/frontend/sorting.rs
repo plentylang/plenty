@@ -212,12 +212,9 @@ impl Lower<'_> {
                     ("descending".into(), Ty::Bool),
                 ]
                 .into_iter()
-                .chain(workspace.map(|_| {
-                    (
-                        "workspace".into(),
-                        crate::collection::KeySort::workspace_handle(),
-                    )
-                }))
+                .chain(
+                    workspace.map(|_| ("workspace".into(), crate::collection::allocator_handle())),
+                )
                 .collect(),
                 outputs: crate::collection::key_sort_output(stable, error.as_ref())
                     .into_iter()

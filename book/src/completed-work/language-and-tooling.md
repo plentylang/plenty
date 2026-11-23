@@ -7,6 +7,15 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Selected nested debug methods
+
+[`Formatter.format_in`](../design/stdlib/fmt.md#select-structural-field-scratch)
+now stages each nested `debug` spelling using the field allocator. Layout and
+ASCII escaping reuse the rendered spelling. `tests/test_std_alloc_field_repr.rs`
+covers invocation order, refusal partway through a field, callback errors,
+writer progress and execution with ordinary allocations disabled. The selection
+does not change ordinary formatting or allocations requested by callback code.
+
 ### Base64 allocation audit
 
 Traced the ordinary Base64 and Base64url byte and text functions from borrowed
@@ -22,7 +31,7 @@ collector. `output.format_in(&scratch, f"{rows}")` builds hook-free structural
 spellings through the selected allocator. Render refusal precedes any write of
 this field. `tests/test_std_alloc_field_repr.rs` exercises refusal, nested values,
 layout, writer progress and preallocated scratch without system allocation.
-This does not change ordinary formatting or select memory used by nested hooks.
+This first step covered structural values without hooks.
 
 ### Submitter checks allocator callbacks
 

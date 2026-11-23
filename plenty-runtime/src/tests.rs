@@ -37,6 +37,7 @@ const fn scalar(kind: u8) -> Type {
         transparent: false,
         debug: None,
         display: None,
+        selected_debug: None,
         quantity: None,
         finite: None,
         destroy: None,
@@ -382,6 +383,7 @@ static GUARD_CLASS: Type = Type {
     transparent: false,
     debug: None,
     display: None,
+    selected_debug: None,
     quantity: None,
     finite: None,
     ..scalar(b'C')
@@ -2500,6 +2502,7 @@ static RECURSIVE_NODE: Type = Type {
     transparent: false,
     debug: None,
     display: None,
+    selected_debug: None,
     quantity: None,
     finite: None,
     ..scalar(b'C')
@@ -2591,6 +2594,7 @@ fn recursive_heap_children_finish_before_inline_siblings_on_a_small_stack() {
         transparent: false,
         debug: None,
         display: None,
+        selected_debug: None,
         quantity: None,
         finite: None,
         ..GUARD_CLASS

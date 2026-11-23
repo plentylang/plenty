@@ -106,6 +106,8 @@ pub(crate) struct Type {
     pub(crate) destroy: Option<unsafe extern "C" fn(*mut Header)>,
     /// Homogeneous owner-local array layout; never a heap header.
     pub(crate) array: Option<&'static ArrayLayout>,
+    /// Receives the value reference, result cell and literal's borrowed allocator.
+    pub(crate) selected_debug: Option<unsafe extern "C" fn(*const u128, *mut u128, *const u128)>,
 }
 #[repr(C)]
 pub(crate) struct ArrayLayout {
@@ -136,7 +138,8 @@ pub(crate) struct Plan {
     pub(crate) fixed: bool,
 }
 const _: () = {
-    assert!(size_of::<Type>() == 144);
+    assert!(size_of::<Type>() == 152);
+    assert!(std::mem::offset_of!(Type, selected_debug) == 144);
     assert!(std::mem::offset_of!(Type, finite) == 120);
     assert!(std::mem::offset_of!(Type, destroy) == 128);
     assert!(std::mem::offset_of!(Type, array) == 136);
@@ -2900,33 +2903,52 @@ unsafe fn render_fields(
 /// storage if it has any. A flat class's record is its value, so the 16
 /// bytes before it serve as the slot; any other value is copied into such a
 /// slot here, which is enough for a method that only reads it.
-unsafe fn format(adapter: Format, value: u128, ty: &Type, out: &mut crate::render_buffer::Buffer) {
+unsafe fn format(
+    adapter: impl FnOnce(*const u128, *mut u128),
+    value: u128,
+    ty: &Type,
+    out: &mut crate::render_buffer::Buffer,
+) {
     const STACK_WORDS: usize = 32;
     let mut stack = [0u128; STACK_WORDS];
     let mut heap = Vec::new();
+    let mut block;
     let reference = if ty.flat_field() {
         (value as u64 as *const u128).wrapping_sub(1)
     } else {
         let words = ty.slot_words();
-        let slot: &mut [u128] = if words <= STACK_WORDS {
-            &mut stack[..words]
+        let slot = if words <= STACK_WORDS {
+            stack.as_mut_ptr()
+        } else if let Some(allocator) = out.allocator() {
+            let allocation = std::alloc::Layout::array::<u128>(words)
+                .map_err(|_| crate::memory::AllocError::CapacityOverflow)
+                .and_then(|layout| allocator.allocate(layout));
+            block = match allocation {
+                Ok(block) => block,
+                Err(error) => {
+                    out.fail_alloc(error);
+                    return;
+                }
+            };
+            // The validated block satisfies the same u128 layout as the stack slot.
+            block.bytes_mut().as_mut_ptr().cast()
         } else {
             if heap.try_reserve_exact(words).is_err() {
                 out.fail_alloc(crate::memory::AllocError::OutOfMemory);
                 return;
             }
             heap.resize(words, 0u128);
-            &mut heap
+            heap.as_mut_ptr()
         };
         // A sum's scalar variant has no active storage, even if another
         // variant does. Typed relocation also repairs nested record pointers.
-        unsafe { ranges::store(slot.as_mut_ptr(), value, ty) };
-        slot.as_ptr()
+        unsafe { ranges::store(slot, value, ty) };
+        slot.cast_const()
     };
     let mut result = 0u128;
     // SAFETY: the compiler emits the adapter for this type's values; the
     // value stays borrowed for the call.
-    unsafe { adapter(reference, &raw mut result) };
+    adapter(reference, &raw mut result);
     // `Result[str, FormatError]`: the tag is the high word's low bit.
     if (result >> 64) & 1 == 0 {
         let text = result as u64 as *mut Text;
@@ -2943,11 +2965,16 @@ unsafe fn render(value: u128, ty: &Type, out: &mut crate::render_buffer::Buffer)
     if out.failed() {
         return;
     }
-    if let Some(debug) = ty.debug
-        && out.hooks()
-    {
-        unsafe { format(debug, value, ty, out) };
-        return;
+    if out.hooks() {
+        if let Some(allocator) = out.field_allocator {
+            if let Some(debug) = ty.selected_debug {
+                unsafe { format(|v, result| debug(v, result, allocator), value, ty, out) };
+                return;
+            }
+        } else if let Some(debug) = ty.debug {
+            unsafe { format(|v, result| debug(v, result), value, ty, out) };
+            return;
+        }
     }
     if ty.redacted {
         out.extend_from_slice(ty.name.as_bytes());
@@ -3640,6 +3667,25 @@ pub(crate) unsafe fn operation(
             });
             return;
         }
+        if op == ALLOCATOR_FIELD_REPR {
+            let [handle, field, reference, cell] = read_operands::<4>(op, args);
+            let allocator = crate::allocator::bindings::borrow_handle(handle);
+            let mut scratch = crate::render_buffer::Buffer::selected(
+                &allocator,
+                reference as *const u128,
+                cell as *mut u128,
+            );
+            render(field, &*descriptor, &mut scratch);
+            out.write(if scratch.hook_failed() {
+                0
+            } else {
+                fallible(scratch.finish().and_then(|bytes| {
+                    let text = std::str::from_utf8(bytes).expect("renderer emits UTF-8");
+                    strings::try_new_in(text, &allocator).map(|t| t as u128)
+                }))
+            });
+            return;
+        }
         if op == ALLOCATOR_TEXT_REPLACE {
             let [handle, source, old, new] = read_operands::<4>(op, args);
             let allocator = crate::allocator::bindings::borrow_handle(handle);
@@ -3872,9 +3918,9 @@ pub(crate) unsafe fn collection_at(
             crate::allocator::bindings::require_supported_context();
             crate::fail("selected slice requires five operands");
         }
-        if op == ALLOCATOR_TEXT_REPLACE {
+        if matches!(op, ALLOCATOR_TEXT_REPLACE | ALLOCATOR_FIELD_REPR) {
             crate::allocator::bindings::require_supported_context();
-            crate::fail("selected text replacement requires four operands");
+            crate::fail("selected text operation requires four operands");
         }
         if op == ALLOCATOR_TEXT_SPLIT_WHITESPACE {
             let allocator = crate::allocator::bindings::borrow_handle(a);
@@ -3912,15 +3958,6 @@ pub(crate) unsafe fn collection_at(
                 true,
                 CopyDestination::Selected(&allocator),
             ));
-        }
-        if op == ALLOCATOR_FIELD_REPR {
-            let allocator = crate::allocator::bindings::borrow_handle(a);
-            let mut scratch = crate::render_buffer::Buffer::selected(&allocator);
-            render(b, &*descriptor, &mut scratch);
-            return fallible(scratch.finish().and_then(|bytes| {
-                let text = std::str::from_utf8(bytes).expect("renderer emits UTF-8");
-                strings::try_new_in(text, &allocator).map(|t| t as u128)
-            }));
         }
         if op == ALLOCATOR_TEXT_QUOTE {
             let allocator = crate::allocator::bindings::borrow_handle(a);
@@ -4236,7 +4273,9 @@ pub(crate) unsafe fn collection_at(
                 let top = |value: u128, ty: &Type, out: &mut crate::render_buffer::Buffer| match ty
                     .display
                 {
-                    Some(display) if op != 110 && out.hooks() => format(display, value, ty, out),
+                    Some(display) if op != 110 && out.hooks() => {
+                        format(|v, result| display(v, result), value, ty, out)
+                    }
                     _ if op != 110 && ty.quantity.is_some() => {
                         render(value, ty.wrapper.unwrap().fields[0], out);
                         let symbol = ty.quantity.unwrap();

@@ -12,27 +12,34 @@ pub struct KeySetOperation {
     pub opcode: i64,
 }
 
-/// `print` or `str.repr` of a value whose formatting runs user methods: a
+/// A print, representation or selected field whose formatting runs user methods: a
 /// top-level `print` argument's `display`, or the `debug` of a type inside
 /// the value. The runtime calls one generated adapter per hook through the
 /// type's metadata and stops at the first error, which the operation
 /// returns. See book/src/design/facilities/01-builtins/formatting.md.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Formatted {
-    /// `FormatValue`, `TryPrint`, or `TryPrintMany`.
+    /// `FormatValue`, `FieldRepr`, `TryPrint`, or `TryPrintMany`.
     pub operation: CollectionOp,
     pub hooks: Vec<FormatHook>,
     /// `std.fmt.FormatError`, which widens the operation's error.
     pub error: Ty,
 }
 
-/// A generated function `(value: &T, max_bytes: i64, max_depth: i64) ->
-/// Result[str, FormatError]` calling `T`'s `display` or `debug` method.
+/// A generated spelling function returning `Result[str, FormatError]`.
+/// Selected adapters also pass the literal's borrowed allocator.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FormatHook {
     pub ty: Ty,
-    pub display: bool,
+    pub mode: HookMode,
     pub function: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HookMode {
+    Display,
+    Debug,
+    SelectedDebug,
 }
 
 impl Formatted {
@@ -82,13 +89,22 @@ pub struct KeySort {
     pub selected_workspace: bool,
 }
 
+/// Two loans held for one render walk. The raw allocator handle is a separate
+/// operand so the runtime need not know the layout of `std.alloc.Allocator`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldSpelling {
+    pub allocator: Ty,
+    pub source: Ty,
+}
+
+pub(crate) fn allocator_handle() -> Ty {
+    Ty::ForeignPtr(
+        "std.alloc.Handle".into(),
+        crate::foreign::Threads::Shareable,
+    )
+}
+
 impl KeySort {
-    pub(crate) fn workspace_handle() -> Ty {
-        Ty::ForeignPtr(
-            "std.alloc.Handle".into(),
-            crate::foreign::Threads::Shareable,
-        )
-    }
     /// The sorted rows' element type.
     pub fn element(&self) -> Option<&Arc<Ty>> {
         match &self.list {
@@ -272,6 +288,7 @@ pub enum CollectionOp {
     ParseNumber(Ty),
     FormatScalar(Ty),
     FormatValue(Ty),
+    FieldRepr(Arc<FieldSpelling>),
     TryPrint(Ty),
     TryPrintMany(Vec<Ty>),
     Formatted(Arc<Formatted>),
@@ -850,6 +867,14 @@ impl CollectionOp {
                 crate::sum::result(Ty::Unit, crate::sum::io_error()),
             ),
             ListUnpack(t) => (vec![t.clone(), Ty::I64], Ty::Unit),
+            FieldRepr(field) => (
+                vec![
+                    allocator_handle(),
+                    field.source.clone(),
+                    field.allocator.clone(),
+                ],
+                crate::sum::result(Ty::Str, crate::sum::alloc_error()),
+            ),
             FormatScalar(t) | FormatValue(t) => (
                 vec![t.clone()],
                 crate::sum::result(Ty::Str, crate::sum::alloc_error()),
@@ -1143,7 +1168,7 @@ impl CollectionOp {
             ListSortBy(sort) => (
                 [sort.receiver(), sort.callback.clone(), Ty::Bool]
                     .into_iter()
-                    .chain(sort.selected_workspace.then(KeySort::workspace_handle))
+                    .chain(sort.selected_workspace.then(allocator_handle))
                     .collect(),
                 key_sort_output(sort.stable, sort.error.as_ref()).unwrap_or(Ty::Unit),
             ),
@@ -1386,6 +1411,7 @@ impl CollectionOp {
             Self::FileWriteLines => 106,
             Self::FormatScalar(_) => 79,
             Self::FormatValue(_) => 110,
+            Self::FieldRepr(_) => opcode::ALLOCATOR_FIELD_REPR,
             Self::TryPrint(_) => 111,
             Self::TryPrintMany(_) => 166,
             Self::ListUnpack(_) => 167,

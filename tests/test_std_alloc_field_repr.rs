@@ -107,6 +107,10 @@ import std.bytes as binary
 import std.fmt as fmt
 from std.io import StreamError
 
+class Mark:
+    def debug[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        out.text("🙂")
+
 pub class Sink:
     left: i64
     pub def flush(self: &mut Sink) -> Result[(), StreamError]:
@@ -123,15 +127,24 @@ def main() -> Result[(), FormatError | AllocError | IoError]:
     mut scratch = binary.with_capacity(32)?
     scratch.resize(32, 0u8)?
     mut out = fmt.formatter(Sink(4), scratch, 80, 0)?
-    rows = ["🙂"]?
-    match out.format_in(&work, f"{rows}"):
+    text = ["🙂"]?
+    match out.format_in(&work, f"{text}"):
         case Err(error):
             print(error, out.completed())?
         case Ok(_):
             print("unexpected")?
+    mut scratch2 = binary.with_capacity(32)?
+    scratch2.resize(32, 0u8)?
+    mut padded = fmt.formatter(Sink(4), scratch2, 80, 0)?
+    rows = [Mark()]?
+    match padded.format_in(&work, f"{rows:>6}"):
+        case Err(error):
+            print(error, padded.completed())?
+        case Ok(_):
+            print("unexpected")?
     Ok(())
 "#,
-        "std.fmt.FormatError.Output(std.io.StreamError.WriteZero) 4\n",
+        "std.fmt.FormatError.Output(std.io.StreamError.WriteZero) 4\nstd.fmt.FormatError.Output(std.io.StreamError.WriteZero) 4\n",
     );
 }
 
@@ -152,24 +165,185 @@ def work(field: &alloc.Allocator) -> ():
 }
 
 #[test]
-fn selected_structural_walk_never_swallows_nested_debug_hooks() {
-    let error = crate::test_support::check_error(
+fn nested_debug_stages_once_in_walk_order_even_when_truncated() {
+    assert_stdout(
         r#"import std.alloc as alloc
 import std.fmt as fmt
 
 class Label:
+    id: str
+    def display[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        out.text("display")
     def debug[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
-        out.text("hook")
+        print(self.id).unwrap()
+        # The adapter has entered once; its private depth is 32, not the
+        # destination's zero. Check both the last allowed and first denied enter.
+        for _ in range(31):
+            out.enter()?
+        match out.enter():
+            case Err(FormatError.RecursionLimit):
+                pass
+            case _:
+                return Err(FormatError.InvalidSpec)
+        for _ in range(31):
+            out.leave()
+        out.text(&self.id)
 
-def main() -> Result[(), FormatError | AllocError]:
+def width() -> i64:
+    print("width").unwrap()
+    5
+
+def main() -> Result[(), FormatError | AllocError | IoError]:
     field = alloc.system()
-    mut out = fmt.string_formatter(32, 8)?
-    rows = [(Label(), 1)]?
-    out.format_in(&field, f"{rows}")
+    rows = [Label("é"), Label("B")]?
+    mut out = fmt.string_formatter(96, 0)?
+    out.format_in(&field, f"{rows:·>{width()}.3}/{&rows[0:1]!a:>10}/{rows!s}")?
+    print(fmt.finish(&out)?)?
+    print(rows)?
+    Ok(())
+"#,
+        "width\né\nB\né\né\nB\n··[é,/  [\\u{e9}]/[é, B]\né\nB\n[é, B]\n",
+    );
+}
+
+#[test]
+fn nested_debug_refusal_and_hook_error_discard_only_current_field() {
+    let body = r#"
+import std.fmt as fmt
+
+class Label:
+    id: str
+    fails: bool
+    def debug[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        print(self.id).unwrap()
+        out.text(&self.id)?
+        if self.fails:
+            return Err(FormatError.InvalidSpec)
+        Ok(())
+
+def main() -> Result[(), FormatError | AllocError | IoError]:
+    rows = [Label("a", False), Label("b", True), Label("c", False)]?
+    for count in [6, 20]?:
+        storage = budget("field", count, AllocError.CapacityOverflow)
+        mut out = fmt.string_formatter(64, 0)?
+        match out.format_in(&storage, f"n={7}|{rows:>18}"):
+            case Err(error):
+                print(error, out.completed(), fmt.finish(&out)?)?
+            case Ok(_):
+                print("unexpected")?
+    Ok(())
+"#;
+    assert_stdout(
+        &format!("{POLICY}{body}"),
+        "a\nrefused field\nstd.fmt.FormatError.Allocation(AllocError.CapacityOverflow) 4 n=7|\nfield 0 6\na\nb\nstd.fmt.FormatError.InvalidSpec 4 n=7|\nfield 11 9\n",
+    );
+}
+
+#[cfg(feature = "runtime-checks")]
+#[test]
+fn nested_debug_selects_large_receiver_and_ascii_staging_not_callback_allocations() {
+    assert_stdout(
+        r#"import std.alloc as alloc
+import std.fmt as fmt
+
+pub class Pool:
+    blocks: list[alloc.ByteBlock]
+    pub def allocate(self: &mut Pool, request: &alloc.Layout) -> Result[alloc.ByteBlock, AllocError]:
+        self.blocks.pop().ok_or(AllocError.OutOfMemory)
+    pub def release(self: &mut Pool, storage: alloc.ByteBlock) -> ():
+        self.blocks.append(storage).unwrap()
+
+enum Entry:
+    Wide(array[i64, 96], str)
+    Private
+    def debug[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        match self:
+            case Entry.Wide(values, label):
+                out.integer(values[90], 0)?
+                out.text(label)
+            case Entry.Private:
+                # A callback's own allocation still fails independently.
+                text = ("private" + " spelling").map_error(FormatError.Allocation)?
+                out.text(&text)
+
+def main() -> Result[(), FormatError | AllocError | IoError]:
+    root = alloc.system()
+    layout = alloc.layout(4096, 64).unwrap()
+    mut blocks: list[alloc.ByteBlock] = []?
+    for _ in range(12):
+        blocks.append(root.block(&layout)?)?
+    field = alloc.allocator(&root, Pool(blocks)).unwrap()
+    rows = [Entry.Wide(array[i64, 96].filled(9), "éabcdefg")]?
+    bad = [Entry.Private]?
+    mut out = fmt.string_formatter(128, 0)?
+    out.writer.data.reserve(128)?
+    print("__test_fail_allocations_after_0__")?
+    print("__test_begin_no_allocations__")?
+    rendered = out.format_in(&field, f"{rows!a:>20}")
+    print("__test_end_no_allocations__")?
+    failed = out.format_in(&field, f"|{bad}")
+    print("__test_restore_allocations__")?
+    rendered?
+    match failed:
+        case Err(error):
+            print(error, fmt.finish(&out)?)?
+        case Ok(_):
+            print("unexpected")?
+    Ok(())
+"#,
+        "__test_fail_allocations_after_0__\n__test_begin_no_allocations__\n__test_end_no_allocations__\n__test_restore_allocations__\nstd.fmt.FormatError.Allocation(AllocError.OutOfMemory)     [9\\u{e9}abcdefg]|\n",
+    );
+}
+
+#[test]
+fn nested_debug_worker_checks_include_callback_body() {
+    let error = crate::test_support::check_error(
+        r#"import std.alloc as alloc
+import std.fmt as fmt
+import std.env
+
+class Label:
+    def debug[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        path = std.env.current_dir().unwrap()
+        std.env.set_current_dir(&path).unwrap()
+        out.text("x")
+
+def work() -> ():
+    storage = alloc.system()
+    mut out = fmt.string_formatter(32, 0).unwrap()
+    pair = (Label(), 1)
+    out.format_in(&storage, f"{pair}").unwrap()
+
+def main() -> ():
+    with spawn(work).drop_job().unwrap() as task:
+        task.join()
 "#,
     );
-    assert!(
-        error.contains("does not yet support selected scratch"),
-        "{error}"
+    assert!(error.contains("changing the working directory"), "{error}");
+}
+
+#[test]
+fn nested_debug_discovery_matches_ordinary_fixed_array_fields() {
+    assert_stdout(
+        r#"import std.alloc as alloc
+import std.fmt as fmt
+
+@copy
+class Item:
+    n: i64
+    def debug[W](self, out: &mut fmt.Formatter[W]) -> Result[(), FormatError]:
+        print("hook").unwrap()
+        out.text("item")
+
+def main() -> Result[(), FormatError | AllocError | IoError]:
+    scratch = alloc.system()
+    rows = array[Item, 2].filled(Item(1))
+    mut out = fmt.string_formatter(100, 0)?
+    out.format(f"{rows}|")?
+    out.format_in(&scratch, f"{rows}")?
+    print(fmt.finish(&out)?)?
+    Ok(())
+"#,
+        "array[Item(n=1), Item(n=1)]|array[Item(n=1), Item(n=1)]\n",
     );
 }

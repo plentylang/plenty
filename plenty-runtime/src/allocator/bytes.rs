@@ -4,7 +4,7 @@ use crate::memory::{self, AllocError};
 use std::alloc::Layout;
 
 pub(crate) struct SelectedBytes {
-    allocator: Allocator,
+    pub(crate) allocator: Allocator,
     pub(crate) backing: Option<Block>,
     pub(crate) len: usize,
 }

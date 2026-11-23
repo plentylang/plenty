@@ -118,8 +118,11 @@ how the compiler spells a field on the ordinary `format` path.
 
 Nested hooks differ from a top-level streaming hook: a list element's
 `debug` adapter returns a spelling to the runtime renderer, which appends
-it to the aggregate's buffer. Counting output by calling the hook twice
-would change observable behavior. Padded quoted **plain text** needs no private collector: `debug_text_spec` measures the escaped spelling using inline pieces. For a complete body the collected formatter reuses its own scratch and submits one write; streaming or precision-cut output writes visible scalars. Fill and cursor growth use the existing formatter. Without a spec, `debug_text` writes directly.
+it to the aggregate's buffer. With `format_in`, both the walk and each nested
+adapter use field scratch (including a large inline receiver slot if needed,
+the private formatter and its non-inline text). Refusal or hook error releases
+staged storage without exposing a prefix. Layout does not replay the hook.
+Allocations requested by the callback itself are independent. Padded quoted **plain text** needs no private collector: `debug_text_spec` measures the escaped spelling using inline pieces. For a complete body the collected formatter reuses its own scratch and submits one write; streaming or precision-cut output writes visible scalars. Fill and cursor growth use the existing formatter. Without a spec, `debug_text` writes directly.
 
 Trace: `src/frontend/fstrings.rs` (template and field lowering, method
 adapters), `stdlib/std/fmt.plenty` (integer, representation and collector

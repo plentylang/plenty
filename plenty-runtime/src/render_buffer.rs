@@ -17,10 +17,11 @@ pub(crate) struct Buffer {
     bytes: Bytes,
     error: Option<AllocError>,
     /// Where a failed `display` or `debug` method's `Result` goes. Only
-    /// `print` and `str.repr` pass one, so other renderings, such as `main`'s
-    /// error report, never run user methods.
+    /// hooked field, `print` and `str.repr` operations pass one, so `main`'s
+    /// raw error report never runs user methods.
     hooks: Option<*mut u128>,
     hook_failed: bool,
+    pub(crate) field_allocator: Option<*const u128>,
 }
 impl Buffer {
     /// A buffer whose rendering calls the types' formatting adapters.
@@ -30,11 +31,19 @@ impl Buffer {
             ..Self::default()
         }
     }
-    /// A structural walk only: there is no callback result cell.
-    pub fn selected(allocator: &Allocator) -> Self {
+    /// The allocator reference remains borrowed through all selected callbacks.
+    pub fn selected(allocator: &Allocator, reference: *const u128, cell: *mut u128) -> Self {
         Self {
             bytes: Bytes::Selected(SelectedBytes::new(allocator)),
-            ..Self::default()
+            field_allocator: Some(reference),
+            ..Self::hooked(cell)
+        }
+    }
+    /// Large borrowed inline hook receivers need an aligned temporary slot.
+    pub fn allocator(&self) -> Option<&Allocator> {
+        match &self.bytes {
+            Bytes::Selected(bytes) => Some(&bytes.allocator),
+            Bytes::Ordinary(_) => None,
         }
     }
     pub fn hooks(&self) -> bool {
