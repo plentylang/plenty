@@ -7,6 +7,12 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Selected byte buffers in the standard library
+
+The selected formatter, byte join and replacement, and streaming text join use
+`bytes_with_capacity` to create buffers, not a slice of an empty literal. The
+constructor itself still uses the selected slice primitive to create its owner.
+
 ### Storage selection guide
 
 [Choose storage for a task](../design/stdlib/alloc.md#choose-storage-for-a-task) links ordinary list, byte-buffer and formatting operations to the point where the caller chooses storage.
