@@ -203,6 +203,15 @@ base64url `ceil(4n / 3)`. A decoder allocates its output before it examines
 the alphabet, so rejected input pays for that buffer, which is released before
 returning.
 
+For standard and URL Base64, the byte result uses ordinary storage, regardless
+of the input's allocator. Even empty `Bytes` has an owner. The text encoders
+stage those bytes even when the final `str` fits inline (up to seven bytes).
+For selected **final text** you can call `base64_encode` and then
+`out.decode_text(&encoded)`; this selects only the non-inline string, not
+`encoded`. Likewise, [`out.slice_bytes(&decoded)`](alloc.md#copy-a-byte-slice-into-packed-storage)
+selects a second copy, not the decoder's result allocation. None of these
+codecs accepts an output buffer or writer. See the [Base64 allocation trace](../toolchain/02-architecture/allocation-sites.md#base64-packed-result-or-text-staging).
+
 Every byte goes through a checked single-element `Bytes` call. Measured with a
 release compiler on x86-64 Linux, pinned to one core, on an 8,388,608-byte
 input:
