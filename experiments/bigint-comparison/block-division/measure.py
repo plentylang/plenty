@@ -16,7 +16,11 @@ def workloads(bits, rng):
     for case, radix in [("decimal", 10), ("ternary", 3), ("base36", 36)]:
         yield case, "render", a, b, radix
     yield "dense", "mul", a, b, 10
-    yield "decimal", "parse", a, b, 10
+    for case, radix in [
+        ("decimal", 10), ("ternary", 3), ("base12", 12), ("base36", 36),
+        ("octal", 8), ("hex", 16),
+    ]:
+        yield case, "parse", a, b, radix
 
 
 def measure(args, engines, path, writer):

@@ -161,6 +161,20 @@ The algorithm trace and timings in `experiments/bigint-comparison/block-division
 record the crossover against optimized Algorithm D and Malachite. Issue #987
 tracks the remaining elapsed-time gap and broader crossover work.
 
+### Bigint grouped radix parsing (issue #987)
+
+Parsing packs power-of-two digits into limbs and builds other bases in
+word-sized groups. Large inputs share split powers and combine limb
+products directly. Generating a large radix power omits whole low zero
+limbs and squares in one forward transform. Signs, exact digit caps, and
+fallible allocation are preserved.
+
+Both compiler modes check mixed-case inputs around limb boundaries and
+large grouped parsing against a separate power expansion. The algorithm
+trace, elapsed times, and differential checks are in
+`experiments/bigint-comparison/radix-parse/`. Issue #987 tracks the
+remaining conversion and arithmetic latency gap.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary
