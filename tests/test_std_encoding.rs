@@ -972,6 +972,32 @@ print(str.repr(c)?)?
 
 #[cfg(feature = "runtime-checks")]
 #[test]
+fn base64_text_stages_bytes_even_for_an_inline_result() {
+    // Same five input bytes: seven symbols fit inline, eight need a text block.
+    // Both first need backing and an owner for the encoded Bytes.
+    native(
+        r#"
+print("__test_fail_allocations_after_1__")?
+a = std.encoding.base64url_text(b"hello")
+print("__test_fail_allocations_after_2__")?
+b = std.encoding.base64url_text(b"hello")
+print("__test_fail_allocations_after_2__")?
+c = std.encoding.base64_text(b"hello")
+print("__test_restore_allocations__")?
+print(str.repr(a)?)?
+print(b?)?
+print(str.repr(c)?)?
+"#,
+        r#"
+Result[str, E].Err(E.Allocation(AllocError.OutOfMemory))
+aGVsbG8
+Result[str, E].Err(E.Allocation(AllocError.OutOfMemory))
+"#,
+    );
+}
+
+#[cfg(feature = "runtime-checks")]
+#[test]
 fn text_decoders_allocate_only_output_and_release_partial_storage() {
     // A borrowed input needs no buffer. Budget 1 fails the output owner's
     // allocation after its storage succeeds; runtime balance checks detect a

@@ -1,7 +1,7 @@
 # Allocation sites: independent results and scratch storage
 
-This inventory covers three families of independent results. It records where
-storage is obtained, including paths that only borrow or transfer an existing
+This inventory records where independent results and their temporary storage
+come from, including paths that only borrow or transfer an existing
 value. It is **not** an inventory of all language or std allocation. In
 particular it excludes allocations made by expressions that produce the
 operands, and allocations internal to user provider callbacks.
@@ -15,6 +15,45 @@ for object, backing and release contracts. A retained leaf keeps its existing
 provenance in either kind of result. Paths below are relative to the repository
 root; native aggregate functions without a path are in
 `plenty-runtime/src/aggregates.rs`.
+
+## Base64: packed result or text staging
+
+The eight `base64_*` and `base64url_*` [codec functions](../../stdlib/encoding.md#codecs)
+share `encode64` and `decode64` in `stdlib/std/encoding.plenty`. The `url` flag
+changes alphabet and padding, not storage policy. Neither helper takes a
+destination. There is no writer, user callback, or foreign codec workspace:
+`symbol`, `sextet` and `symbol_at` use scalar arithmetic on borrowed bytes.
+This trace excludes MIME wrapping, PEM and custom alphabets.
+
+| Public operation | Before return | What escapes on success |
+| --- | --- | --- |
+| `_encode(source: &[u8])` | `base64_capacity` checks the expanded size; `encode64` reserves it once and `emit` calls `Bytes.push` within capacity. | The filled ordinary `Bytes`; no second buffer. |
+| `_decode(source: &[u8])` | `decode64` checks length, discounts trailing padding for standard Base64, then reserves the exact decoded size **before** checking symbols and unused bits. `emit` fills that buffer. | The ordinary decoded `Bytes`. A late error drops the partly filled buffer. |
+| `_from_text(text: &strview)` | `text.as_bytes()` lends the UTF-8 range directly to `decode64`. | Same as `_decode`; no input copy. |
+| `_text(source: &[u8])` | The `Bytes` from `encode64` is **staging**. `Bytes.to_text` borrows it via `text_in` / `__bytes_to_text`; the runtime copies its ASCII bytes into text. | Only the `str`: up to seven bytes inline, otherwise one ordinary text block. The staging owner dies on success or refusal. |
+
+One logical `Bytes` is not one allocation. `std.bytes.with_capacity` calls
+`__bytes_new`; opcode 170 in `plenty-runtime/src/aggregates/byte_storage.rs`
+calls `create`, reserving `Vec<u8>` backing before allocating the `Storage`
+owner. Empty output needs the owner but no payload block. Owner refusal drops
+the provisional vector; last release calls `destroy` to drop the vector and
+free the owner. `plenty_bytes_push` needs no growth with space remaining.
+For text, `to_text` in the same file handles inline ASCII or calls
+`strings::try_from_utf8` (`plenty-runtime/src/strings.rs`). `lifted` propagates
+text allocation failure as `EncodingError.Allocation`, as the codec does for
+byte allocation. Neither path retries with another allocator.
+
+A selected **source** does not select the result. An allocator can copy the
+completed buffer with `slice_bytes`, or finalize encoded ASCII directly with
+`decode_text`; neither selects the codec's original `Bytes`. The missing step
+is choosing that exact-size owner and backing at construction, not choosing a
+writer or changing the UTF-8 finisher.
+
+`tests/test_std_encoding.rs` exercises capacity arithmetic, exact-size results,
+refusal of backing, owner and long text, and release on late rejection. Under
+`runtime-checks`, `base64_text_stages_bytes_even_for_an_inline_result` gives
+both variants the same five input bytes: two allocations suffice for seven
+unpadded symbols, but not for the eight-symbol padded string.
 
 ## Formatting: quoted text from `str.repr`
 
