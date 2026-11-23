@@ -9,6 +9,13 @@ fn parse(text: &str) -> Integer {
     Integer::from_string_base(16, text).unwrap()
 }
 
+fn operand(text: &str) -> Integer {
+    match text.strip_prefix('@') {
+        Some(path) => parse(&std::fs::read_to_string(path).unwrap()),
+        None => parse(text),
+    }
+}
+
 fn emit(value: &Integer) {
     println!("{}", value.to_string_base(16));
 }
@@ -64,10 +71,15 @@ fn main() {
         return;
     }
     let op = args[1].as_str();
-    let a = parse(&args[2]);
-    let b = parse(&args[3]);
+    let a = operand(&args[2]);
+    let b = operand(&args[3]);
     let count: u64 = args[4].parse().unwrap();
-    let text = a.to_string_base(10);
+    let radix = args.get(5).map_or(10, |value| value.parse().unwrap());
+    let text = if op == "parse" {
+        a.to_string_base(radix)
+    } else {
+        String::new()
+    };
     let mut checksum = 0u64;
     let start = std::time::Instant::now();
     macro_rules! batch {
@@ -82,9 +94,9 @@ fn main() {
         "mul" => batch!(black_box(black_box(&a) * black_box(&b)).significant_bits()),
         "div" => batch!(black_box(black_box(&a).div_mod(black_box(&b)).0).significant_bits()),
         "parse" => batch!(
-            black_box(Integer::from_string_base(10, black_box(&text)).unwrap()).significant_bits()
+            black_box(Integer::from_string_base(radix, black_box(&text)).unwrap()).significant_bits()
         ),
-        "render" => batch!(black_box(black_box(&a).to_string_base(10)).len() as u64),
+        "render" => batch!(black_box(black_box(&a).to_string_base(radix)).len() as u64),
         _ => panic!("unknown operation"),
     }
     println!("{} {checksum}", start.elapsed().as_nanos());

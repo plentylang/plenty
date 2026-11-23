@@ -267,6 +267,41 @@ def main() -> Result[(), AllocError | BigIntError | IoError]:
 }
 
 #[test]
+fn recursive_division_handles_a_saturated_quotient_block() {
+    let body = r#"    one = from_i64(1)
+    divisor = ((one << 131071)? + one)?
+    block = (one << 65536)?
+    # The initial remainder is one below the divisor. Its high half
+    # matches the divisor's, so the recursive trial block saturates.
+    a = (((divisor << 65536)?) - one)?
+    (q, r) = a.checked_divmod(&divisor)?
+    print(q == (block - one)?, r == (divisor - one)?)?
+    negative = (-a)?
+    (floor, modulus) = negative.checked_divmod(&divisor)?
+    print(floor == (-block)?, modulus == one)?
+"#;
+    assert_eq!(run(body, false), "True True\nTrue True\n");
+    assert_eq!(run(body, true), "True True\nTrue True\n");
+}
+
+#[test]
+fn decimal_render_reuses_a_large_split_power_at_the_exact_cap() {
+    let body = r#"    text = "98765432101234567890".repeat(15800)?
+    value = parse(text, 10, 316000)?
+    negative = (-value)?
+    signed = ("-" + text)?
+    print(negative.to_string(10, 316000)? == signed)?
+    match value.to_string(10, 315999):
+        case Err(BigIntError.LimitExceeded):
+            print("limit")?
+        case _:
+            print("wrong result")?
+"#;
+    assert_eq!(run(body, false), "True\nlimit\n");
+    assert_eq!(run(body, true), "True\nlimit\n");
+}
+
+#[test]
 fn large_products_and_division_cross_algorithm_boundaries() {
     let mut body = String::new();
     let mut expected = String::new();
