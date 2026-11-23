@@ -1764,6 +1764,46 @@ impl Lower<'_> {
                 vec![text_value, spec_value(spec)],
             )
         };
+        // Finish structural rendering before writing any of the field. Keep the
+        // outer text/ascii/layout operations (and their progress) unchanged.
+        if selected && matches!(category, Category::Repr) && !hooked && ty != text_view() {
+            let function = if matches!(ty, Ty::View(..)) {
+                "std.alloc._view_field_repr"
+            } else {
+                "std.alloc._field_repr"
+            };
+            let repr = temporary(
+                "field_spelling",
+                vec![call(at, function, vec![name(at, SCRATCH), value])],
+            );
+            let ascii = field.conversion == Conversion::Ascii;
+            return Ok(if let Some(spec) = &spec {
+                spec.check(
+                    if ascii {
+                        &Category::Text
+                    } else {
+                        &Category::Repr
+                    },
+                    &ty,
+                    at,
+                )?;
+                padded(
+                    if ascii {
+                        temporary("ascii_string_in", vec![name(at, SCRATCH), repr])
+                    } else {
+                        repr
+                    },
+                    spec,
+                )
+            } else {
+                method(
+                    at,
+                    out,
+                    if ascii { "ascii_text" } else { "text" },
+                    vec![repr],
+                )
+            });
+        }
         if selected
             && field.conversion == Conversion::Ascii
             && !matches!(category, Category::Method)

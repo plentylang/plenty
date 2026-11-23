@@ -229,10 +229,14 @@ pub def display[W](self, out: &mut Formatter[W]) -> Result[(), FormatError]:
 The argument must be an f-string literal; the compiler lowers the pair to
 calls on `out`, so `out`'s byte budget, depth limit, and partial-progress rules
 apply, and its scratch is reused. A field can still need a separate temporary
-string, for example when laying out a user method's output. Use
+string, for example when laying out a user method's output or rendering a list. Use
 [`out.format_in(&scratch, f"...")`](../../stdlib/fmt.md#select-scratch-for-a-user-formatting-method)
 to select storage for that spelling without changing the destination. Both
 forms require literal templates; a user type's methods are unaffected.
+
+Use `out.format_in(&scratch, f"{rows}")` to [select structural field scratch](../../stdlib/fmt.md#select-structural-field-scratch).
+It borrows the allocator for the literal; allocator refusal is a formatting
+error, not a request to retry with ordinary storage.
 
 ## Cost and failure
 

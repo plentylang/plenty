@@ -822,6 +822,9 @@ pub def to_debug[T](value: &T, max_bytes: NonNegative[i64], max_depth: NonNegati
     debug(value, &mut output)?
     finish(&output)
 
+def field_spelling(spelled: Result[str, AllocError]) -> Result[str, FormatError]:
+    spelled.map_error(FormatError.Allocation)
+
 # Writes the `str.repr` spelling, which `print` also uses for aggregates.
 # A value whose spelling runs a `debug` method uses `repr_text`.
 pub def represent[T, W](value: &T, output: &mut Formatter[W]) -> Result[(), FormatError]:
@@ -832,11 +835,7 @@ pub def represent[T, W](value: &T, output: &mut Formatter[W]) -> Result[(), Form
             Err(FormatError.Allocation(error))
 
 pub def repr_string[T](value: &T) -> Result[str, FormatError]:
-    match str.repr(value):
-        case Ok(text):
-            Ok(text)
-        case Err(error):
-            Err(FormatError.Allocation(error))
+    field_spelling(str.repr(value))
 
 # The same spellings for a slice view, which a `&T` parameter cannot take:
 # a `&[u8]` as a `bytes` literal, any other view as a list.
@@ -848,11 +847,7 @@ pub def represent_view[T, W](value: &[T], output: &mut Formatter[W]) -> Result[(
             Err(FormatError.Allocation(error))
 
 pub def repr_view_string[T](value: &[T]) -> Result[str, FormatError]:
-    match str.repr(value):
-        case Ok(text):
-            Ok(text)
-        case Err(error):
-            Err(FormatError.Allocation(error))
+    field_spelling(str.repr(value))
 
 # The `str.repr` result of a value whose spelling runs a `debug` method,
 # which can fail with that method's error. The compiler calls `str.repr` at

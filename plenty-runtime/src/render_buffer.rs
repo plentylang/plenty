@@ -1,9 +1,20 @@
 //! Checked formatting sink. Formatting is completed before exposing any bytes.
+use crate::allocator::{Allocator, bytes::SelectedBytes};
 use crate::memory::{self, AllocError};
+
+enum Bytes {
+    Ordinary(Vec<u8>),
+    Selected(SelectedBytes),
+}
+impl Default for Bytes {
+    fn default() -> Self {
+        Self::Ordinary(Vec::new())
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Buffer {
-    bytes: Vec<u8>,
+    bytes: Bytes,
     error: Option<AllocError>,
     /// Where a failed `display` or `debug` method's `Result` goes. Only
     /// `print` and `str.repr` pass one, so other renderings, such as `main`'s
@@ -16,6 +27,13 @@ impl Buffer {
     pub fn hooked(cell: *mut u128) -> Self {
         Self {
             hooks: (!cell.is_null()).then_some(cell),
+            ..Self::default()
+        }
+    }
+    /// A structural walk only: there is no callback result cell.
+    pub fn selected(allocator: &Allocator) -> Self {
+        Self {
+            bytes: Bytes::Selected(SelectedBytes::new(allocator)),
             ..Self::default()
         }
     }
@@ -47,27 +65,23 @@ impl Buffer {
         if self.failed() {
             return;
         }
-        let result = self
-            .bytes
-            .len()
-            .checked_add(bytes.len())
-            .ok_or(AllocError::CapacityOverflow)
-            .and_then(memory::checked_capacity::<u8>)
-            .and_then(|_| {
-                self.bytes
-                    .try_reserve(bytes.len())
-                    .map_err(|_| AllocError::OutOfMemory)
-            });
-        match result {
-            Ok(()) => self.bytes.extend_from_slice(bytes),
-            Err(error) => self.error = Some(error),
-        }
+        let result = match &mut self.bytes {
+            Bytes::Ordinary(out) => memory::try_reserve_amortized(out, bytes.len())
+                .map(|()| out.extend_from_slice(bytes)),
+            Bytes::Selected(out) => out
+                .reserve(bytes.len(), true)
+                .map(|()| out.extend_reserved(bytes)),
+        };
+        self.error = result.err();
     }
-    pub fn finish(self) -> Result<Vec<u8>, AllocError> {
-        match self.error {
-            Some(error) => Err(error),
-            None => Ok(self.bytes),
+    pub fn finish(&self) -> Result<&[u8], AllocError> {
+        if let Some(error) = self.error {
+            return Err(error);
         }
+        Ok(match &self.bytes {
+            Bytes::Ordinary(out) => out,
+            Bytes::Selected(out) => out.as_slice(),
+        })
     }
 }
 impl std::io::Write for Buffer {
