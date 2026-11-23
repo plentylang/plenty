@@ -914,27 +914,13 @@ def multiply_into(a: &[u64], b: &[u64], out: &mut [u64]) -> Result[(), AllocErro
 def multiply_skewed_into(longer: &[u64], shorter: &[u64], out: &mut [u64]) -> Result[(), AllocError]:
     unchecked:
         width = len(shorter)
-        n = transform_length(width)
-        plan0 = prepare_transform(shorter, n, width, transform_prime_0())?
-        plan1 = prepare_transform(shorter, n, width, transform_prime_1())?
-        plan2 = prepare_transform(shorter, n, width, transform_prime_2())?
-        plan3 = prepare_transform(shorter, n, width, transform_prime_3())?
-        plan4 = prepare_transform(shorter, n, width, transform_prime_4())?
-        mut row0 = zeros(n)?
-        mut row1 = zeros(n)?
-        mut row2 = zeros(n)?
-        mut row3 = zeros(n)?
-        mut row4 = zeros(n)?
+        prepared = prepare_product(shorter, width)?
+        mut transform_scratch = zeros(5 * prepared.size)?
         mut scratch = zeros(2 * width)?
         mut start = 0
         while start <= len(longer) - width:
             block = &longer[start:start + width]
-            plan0.multiply(block, &mut row0)
-            plan1.multiply(block, &mut row1)
-            plan2.multiply(block, &mut row2)
-            plan3.multiply(block, &mut row3)
-            plan4.multiply(block, &mut row4)
-            drop(transform_wide_recover(&row0, &row1, &row2, &row3, &row4, &mut scratch))
+            prepared.multiply(block, &mut scratch, &mut transform_scratch, False)
             add_shifted(out, &scratch, start)
             start += width
         if start < len(longer):
@@ -1160,17 +1146,19 @@ def multiply_transform_wide_into(a: &[u64], b: &[u64], out: &mut [u64], cyclic: 
         transform_wide_product(a, b, &mut x, &mut y, &mut roots, digits, transform_prime_4(), square)
         (c0, c1, c2) = transform_wide_recover(&residues0, &residues1, &residues2, &residues3, &x, out)
         if cyclic:
-            # B^len(out) is congruent to one. Fold the carry back into
-            # the low words and propagate an end-around carry if needed.
-            (w0, b0) = out[0].carrying_add(c0, False)
-            (w1, b1) = out[1].carrying_add(c1, b0)
-            (w2, b2) = out[2].carrying_add(c2, b1)
-            out[0] = w0
-            out[1] = w1
-            out[2] = w2
-            if b2 and increment_words(&mut out[3:]):
-                drop(increment_words(out))
+            add_cyclic_carry(out, c0, c1, c2)
         Ok(())
+
+# B^len(out) is congruent to one. Fold the carry back into the low words.
+def add_cyclic_carry(out: &mut [u64], c0: u64, c1: u64, c2: u64) -> ():
+    (w0, b0) = out[0].carrying_add(c0, False)
+    (w1, b1) = out[1].carrying_add(c1, b0)
+    (w2, b2) = out[2].carrying_add(c2, b1)
+    out[0] = w0
+    out[1] = w1
+    out[2] = w2
+    if b2 and increment_words(&mut out[3:]):
+        drop(increment_words(out))
 
 # For a word below 2p, the high bit of word-p marks unsigned underflow.
 def reduce_transform_word(word: u64, p: u64) -> u64:
@@ -1274,6 +1262,39 @@ def prepare_transform(words: &[u64], n: i64, count: i64, prime: TransformPrime) 
     load_factor = transform_wide_multiply(prime.r3, scale, prime.p, prime.inverse)
     transform_wide_prepare(words, &mut points, count, &roots, prime, load_factor)
     Ok(PreparedTransform(prime, count, roots, points))
+
+class PreparedProduct:
+    size: i64
+    p0: PreparedTransform
+    p1: PreparedTransform
+    p2: PreparedTransform
+    p3: PreparedTransform
+    p4: PreparedTransform
+
+    # The caller supplies one inverse row per prime for reuse across products.
+    def multiply(self, a: &[u64], out: &mut [u64], scratch: &mut [u64], cyclic: bool) -> ():
+        unchecked:
+            n = self.size
+            self.p0.multiply(a, &mut scratch[:n])
+            self.p1.multiply(a, &mut scratch[n:2 * n])
+            self.p2.multiply(a, &mut scratch[2 * n:3 * n])
+            self.p3.multiply(a, &mut scratch[3 * n:4 * n])
+            self.p4.multiply(a, &mut scratch[4 * n:5 * n])
+            (c0, c1, c2) = transform_wide_recover(
+                &scratch[:n], &scratch[n:2 * n], &scratch[2 * n:3 * n],
+                &scratch[3 * n:4 * n], &scratch[4 * n:5 * n], out)
+            if cyclic:
+                add_cyclic_carry(out, c0, c1, c2)
+
+def prepare_product(words: &[u64], count: i64) -> Result[PreparedProduct, AllocError]:
+    n = transform_length(count)
+    Ok(PreparedProduct(
+        n,
+        prepare_transform(words, n, count, transform_prime_0())?,
+        prepare_transform(words, n, count, transform_prime_1())?,
+        prepare_transform(words, n, count, transform_prime_2())?,
+        prepare_transform(words, n, count, transform_prime_3())?,
+        prepare_transform(words, n, count, transform_prime_4())?))
 
 # In decimation-in-frequency order the first half of the values comes
 # from the sums of the coefficient halves. The second half comes from
@@ -1576,6 +1597,45 @@ def inverse_division_word(divisor: u64) -> u64:
 class DivisionReciprocal:
     digits: list[u64]
     cyclic_words: i64
+    correction: PreparedProduct
+    estimate: Option[PreparedProduct]
+
+    def transform_scratch_size(self) -> i64:
+        match &self.estimate:
+            case Some(prepared):
+                if prepared.size > self.correction.size:
+                    return prepared.size
+            case Nothing:
+                pass
+        self.correction.size
+
+    def estimate_product(self, top: &[u64], product: &mut [u64], scratch: &mut [u64]) -> Result[(), AllocError]:
+        unchecked:
+            if len(top) == len(self.digits):
+                match &self.estimate:
+                    case Some(prepared):
+                        prepared.multiply(top, product, scratch, False)
+                        return Ok(())
+                    case Nothing:
+                        pass
+            clear_words(product)
+            multiply_into(top, &self.digits[len(self.digits) - len(top):], product)
+
+# The divisor uses the same cyclic width for every block. The estimate
+# transform applies only to full blocks, which all use the same reciprocal.
+def prepare_reciprocal_products(v: &[u64], digits: list[u64], cyclic: i64, repeat_estimate: bool) -> Result[DivisionReciprocal, AllocError]:
+    width = len(digits)
+    estimate = if repeat_estimate and use_transform(width, width):
+        Some(prepare_product(&digits, width)?)
+    else:
+        Nothing
+    correction = if len(v) <= cyclic:
+        prepare_product(v, cyclic // 2)?
+    else:
+        mut folded = zeros(cyclic)?
+        fold_cyclic(v, &mut folded)
+        prepare_product(&folded, cyclic // 2)?
+    Ok(DivisionReciprocal(digits, cyclic, correction, estimate))
 
 # The omitted low limbs are zero in the divisor, so the corresponding
 # low dividend limbs pass directly to the remainder.
@@ -1590,18 +1650,21 @@ class WideDivisor:
         unchecked:
             n = len(self.digits)
             high = dividend_limbs - self.first - n
-            if n < DIVISION_RECIPROCAL_LIMBS or n >= MAX_TRANSFORM_WORDS or high < n or high > 2 * n:
+            if n < DIVISION_RECIPROCAL_LIMBS or n >= MAX_TRANSFORM_WORDS or high < n:
                 return Ok(())
             cyclic = division_cyclic_width(n)
             if cyclic == 0:
                 return Ok(())
-            blocks = (high + n - 2) // (n - 1)
-            width = (high + blocks - 1) // blocks
-            tail = high - (blocks - 1) * width
+            blocks = (high - 1) // (n - 1) + 1
+            width = (high - 1) // blocks + 1
+            # Equal full blocks can leave a short tail. Compute the
+            # difference from width without multiplying width by blocks.
+            excess = (blocks - high % blocks) % blocks
+            tail = width - excess
             if tail < RECIPROCAL_TAIL_LIMBS or n + tail <= cyclic:
                 return Ok(())
             digits = division_reciprocal_newton(&self.digits, width)?
-            self.reciprocal = Some(DivisionReciprocal(digits, cyclic))
+            self.reciprocal = Some(prepare_reciprocal_products(&self.digits, digits, cyclic, high // width >= 2)?)
             Ok(())
 
     def prepare_radix_reciprocal(self: &mut WideDivisor, dividend_limbs: i64) -> Result[(), AllocError]:
@@ -1626,7 +1689,7 @@ class WideDivisor:
                     division_reciprocal_newton(&self.digits, width)?
                 else:
                     division_reciprocal(&self.digits, width)?
-                self.reciprocal = Some(DivisionReciprocal(digits, cyclic))
+                self.reciprocal = Some(prepare_reciprocal_products(&self.digits, digits, cyclic, True)?)
             Ok(())
 
 def prepare_wide_divisor(value: &BigInt) -> Result[WideDivisor, AllocError]:
@@ -1962,11 +2025,10 @@ def division_reciprocal(v: &[u64], k: i64) -> Result[list[u64], AllocError]:
 # width C does not cover all n+1 limbs, R = A + t*(B^C-1) for canonical
 # residue A and 0 <= t < B^(n+1-C). Reduce this relation modulo
 # B^(n+1-C) to get t from A and a short product for R's low limbs.
-def subtract_cyclic_product(u: &mut [u64], v: &[u64], q: &[u64], product: &mut [u64], folded: &mut [u64]) -> Result[u64, AllocError]:
+def subtract_cyclic_product(u: &mut [u64], v: &[u64], q: &[u64], product: &[u64], folded: &mut [u64]) -> Result[u64, AllocError]:
     unchecked:
         width = len(product)
         n = len(v)
-        multiply_wraparound(v, q, product)?
         fold_cyclic(u, folded)
         if subtract_division_words(folded, product) != 0u64:
             drop(decrement_words(folded))
@@ -2013,6 +2075,7 @@ def divide_reciprocal_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u
         product_size = 2 * width if 2 * width > cyclic else cyclic
         mut scratch = zeros(product_size)?
         mut folded = zeros(cyclic)?
+        mut transform_scratch = zeros(5 * reciprocal.transform_scratch_size())?
         while high > 0:
             k = width if width < high else high
             if k < RECIPROCAL_TAIL_LIMBS or n + k <= cyclic:
@@ -2021,12 +2084,17 @@ def divide_reciprocal_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u
             offset = high - k
             top = &u[high + n - k:high + n]
             product = &mut scratch[:2 * k]
-            clear_words(product)
-            multiply_into(top, &reciprocal.digits[width - k:], product)?
+            reciprocal.estimate_product(top, product, &mut transform_scratch)?
             quotient = &mut q[offset:high]
             copy_words(top, quotient)
             drop(add_division_words(quotient, &product[k:]))
-            mut upper = subtract_cyclic_product(&mut u[offset:high + n], v, quotient, &mut scratch[:cyclic], &mut folded)?
+            correction = &mut scratch[:cyclic]
+            if k <= cyclic:
+                reciprocal.correction.multiply(quotient, correction, &mut transform_scratch, True)
+            else:
+                fold_cyclic(quotient, &mut folded)
+                reciprocal.correction.multiply(&folded, correction, &mut transform_scratch, True)
+            mut upper = subtract_cyclic_product(&mut u[offset:high + n], v, quotient, correction, &mut folded)?
             row = &mut u[offset:offset + n]
             while upper != 0u64 or compare_division_words(row, v) >= 0:
                 drop(increment_words(quotient))

@@ -216,6 +216,20 @@ The report in `experiments/bigint-comparison/cyclic-products/` records the
 crossover, exact validation, and the scalar radix-4 and guarded high-product
 trials. Issue #987 tracks the remaining gap to Malachite.
 
+### Bigint reusable Barrett transforms (issue #987)
+
+Barrett quotient blocks share the divisor's forward transform. Full blocks
+can share the reciprocal's forward transform for quotient estimation.
+Repeated radix splits use those same prepared operands. This removes the
+two-divisor-width quotient cutoff while keeping transform scratch bounded
+by the divisor width. A regression in both compiler modes covers wide
+signed quotients, full and short final blocks, and quotient blocks wider
+than the cyclic modulus.
+
+The measurements and packing and vector transform experiments are in
+`experiments/bigint-comparison/barrett-plans/`. Issue #987 tracks the
+remaining latency gap, including conversion and multiplication.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary
