@@ -58,6 +58,9 @@ pub const ALLOCATOR_TEXT_SPLITLINES: i64 = 679;
 pub const ALLOCATOR_TEXT_QUOTE: i64 = 680;
 /// Consume dictionary values into a selected list; descriptor is list[V].
 pub const ALLOCATOR_INTO_VALUES: i64 = 681;
+/// Handle and borrowed packed value; descriptor is the hook-free field type.
+/// Both the render buffer and any non-inline temporary text use this handle.
+pub const ALLOCATOR_FIELD_REPR: i64 = 682;
 
 pub const SET_IS_SUBSET: i64 = 62;
 pub const SET_IS_SUPERSET: i64 = 63;

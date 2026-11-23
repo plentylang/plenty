@@ -184,6 +184,27 @@ impl Lower<'_> {
                     Some(list),
                 )
             }
+            "__allocator_field_repr" | "__allocator_view_field_repr" => {
+                let [element] = types else {
+                    return Err(at.error("allocator field representation requires one type"));
+                };
+                let element = element.resolve(self.aliases)?.unwrap_or(Ty::Unit);
+                let (source, descriptor) = if name == "__allocator_view_field_repr" {
+                    let view = Ty::View(Arc::new(element), false);
+                    (view.clone(), view)
+                } else {
+                    (Ty::Ref(Arc::new(element.clone()), false), element)
+                };
+                if let Some(message) = collections::repr_rejection(&descriptor) {
+                    return Err(at.error(message));
+                }
+                (
+                    code::ALLOCATOR_FIELD_REPR,
+                    vec![handle, source],
+                    Some(crate::sum::result(Ty::Str, crate::sum::alloc_error())),
+                    Some(descriptor),
+                )
+            }
             "__allocator_text_quote" => (
                 code::ALLOCATOR_TEXT_QUOTE,
                 vec![handle, Ty::View(Arc::new(Ty::Text), false)],

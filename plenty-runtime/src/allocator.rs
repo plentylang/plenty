@@ -384,6 +384,7 @@ impl Drop for Block {
 }
 
 pub(crate) mod bindings;
+pub(crate) mod bytes;
 pub(crate) mod compiled;
 
 #[cfg(test)]

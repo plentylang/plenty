@@ -433,3 +433,10 @@ pub def allocator[P: Provider](bootstrap: &Allocator, provider: P) -> Result[All
             if status == _REGISTRATION_UNSUPPORTED_CONTEXT:
                 return Err(RegistrationError[P].UnsupportedContext(state))
             __trap("invalid allocator registration status")
+
+# Compiler-generated fields call these only after ruling out formatting hooks.
+def _field_repr[T](scratch: &Allocator, value: &T) -> Result[str, AllocError]:
+    __allocator_field_repr[T](scratch._handle, value)
+
+def _view_field_repr[T](scratch: &Allocator, value: &[T]) -> Result[str, AllocError]:
+    __allocator_view_field_repr[T](scratch._handle, value)

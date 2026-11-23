@@ -46,11 +46,15 @@ impl Lowerer<'_, '_> {
             Intrinsic::Allocator { opcode, descriptor } => {
                 use crate::collection_opcodes::{
                     ALLOCATOR_BLOCK, ALLOCATOR_BLOCK_SPLIT, ALLOCATOR_BOX, ALLOCATOR_COPY,
+                    ALLOCATOR_FIELD_REPR,
                 };
                 for (argument, (_, ty)) in args.iter_mut().zip(&sig.inputs) {
                     if let Ty::Ref(inner, _) = ty {
                         *argument = self.read_typed_reference(*argument, inner);
-                        if matches!(*opcode, ALLOCATOR_BOX | ALLOCATOR_COPY) {
+                        if matches!(
+                            *opcode,
+                            ALLOCATOR_BOX | ALLOCATOR_COPY | ALLOCATOR_FIELD_REPR
+                        ) {
                             // Reference reads leave narrow scalars unpacked; the
                             // runtime expects the ordinary packed value.
                             let value = self.unpack(*argument, inner);

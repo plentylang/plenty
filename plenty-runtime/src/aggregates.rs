@@ -3484,7 +3484,7 @@ operation_entries! {
     125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 166 167 366 510 511 580 581 582
     583 584 585 590 591 592 593 594 595 596 597 598 599 600 601 602 603 606 608 609 612
     613 614 615 616
-    650 651 652 653 654 655 656 657 658 659 660 661 662 663 664 665 666 667 668 669 670 671 672 673 674 675 676 677 678 679 680 681
+    650 651 652 653 654 655 656 657 658 659 660 661 662 663 664 665 666 667 668 669 670 671 672 673 674 675 676 677 678 679 680 681 682
 }
 // Checked UTF-8 range forms of existing text builtins (original opcode +1000).
 operation_entries! {
@@ -3617,6 +3617,7 @@ pub(crate) unsafe fn operation(
                 | ALLOCATOR_TEXT_STRIP
                 | ALLOCATOR_TEXT_CASE
                 | ALLOCATOR_TEXT_QUOTE
+                | ALLOCATOR_FIELD_REPR
                 | ALLOCATOR_TEXT_SPLIT
                 | ALLOCATOR_TEXT_SPLIT_WHITESPACE
                 | ALLOCATOR_TEXT_SPLITLINES
@@ -3911,6 +3912,15 @@ pub(crate) unsafe fn collection_at(
                 true,
                 CopyDestination::Selected(&allocator),
             ));
+        }
+        if op == ALLOCATOR_FIELD_REPR {
+            let allocator = crate::allocator::bindings::borrow_handle(a);
+            let mut scratch = crate::render_buffer::Buffer::selected(&allocator);
+            render(b, &*descriptor, &mut scratch);
+            return fallible(scratch.finish().and_then(|bytes| {
+                let text = std::str::from_utf8(bytes).expect("renderer emits UTF-8");
+                strings::try_new_in(text, &allocator).map(|t| t as u128)
+            }));
         }
         if op == ALLOCATOR_TEXT_QUOTE {
             let allocator = crate::allocator::bindings::borrow_handle(a);
@@ -4268,14 +4278,14 @@ pub(crate) unsafe fn collection_at(
                             .and_then(|bytes| {
                                 std::io::stdout()
                                     .lock()
-                                    .write_all(&bytes)
+                                    .write_all(bytes)
                                     .map(|()| 0)
                                     .map_err(crate::text_io::Error::from)
                             });
                     crate::text_io::result(result)
                 } else {
                     match out.finish().and_then(|bytes| {
-                        strings::try_new(std::str::from_utf8(&bytes).expect("renderer emits UTF-8"))
+                        strings::try_new(std::str::from_utf8(bytes).expect("renderer emits UTF-8"))
                     }) {
                         Ok(text) => wrap(text as u128, 0),
                         Err(error) => wrap(wrap(0, error as u64), 1),
