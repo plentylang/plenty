@@ -91,9 +91,13 @@ The NTT requires both operands to have at least 1,024 limbs, a size ratio at
 most 2:1, at least five-eighths transform occupancy, and at most 524,288
 combined limbs. Occupancy uses the actual digit counts, rounding each operand's
 limb count up to a pair, including padding for odd limb counts. The primes'
-2⁴⁰ transform order exceeds this retained cap. Other shapes use Toom-3,
-Karatsuba, or schoolbook multiplication as applicable. This transform bound
-is an algorithm-selection limit, not a limit on BigInt precision.
+2⁴⁰ transform order exceeds this retained cap. When the longer operand exceeds
+twice the shorter operand's width, qualifying products split the longer
+operand into blocks the width of the shorter operand. Full blocks use the
+transform and reuse a scratch row for overlapping partial products. Other
+shapes use Toom-3, Karatsuba, or schoolbook multiplication as applicable.
+This transform bound is an algorithm-selection limit, not a limit on BigInt
+precision.
 Karatsuba and Toom-3 borrow operand limb views and write
 their low and high products (the evaluations at 0 and infinity) directly into
 disjoint regions of the final output, avoiding two owned recursive product
@@ -109,6 +113,11 @@ Large balanced divisions process quotient blocks recursively. Each block
 divides by the high half of the divisor and uses a multiplication by the
 omitted low half to correct its estimate. This gives subquadratic division
 when both operand shapes can use subquadratic multiplication.
+For a large divisor and a short quotient of `k` limbs, division can estimate
+the quotient from the top `2k` dividend limbs and `k` divisor limbs, then
+correct it with one product using the omitted divisor limbs. This path
+requires a correction product that qualifies for direct or blocked
+transform multiplication.
 
 Parsing validates the full input before allocating limb storage. Leading
 zeros count toward the digit cap and are skipped during construction.
@@ -172,6 +181,6 @@ numeric carry bit, not a mode selection.
   exact modular arithmetic for transform residues, roots and products.
 - [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
   bit-length sizing, direct bit packing and extraction, grouped digit
-  conversion, radix-power squaring, recursive quotient blocks, and reuse of
-  Barrett reciprocals with cyclic correction products. This is an independent
-  Plenty implementation.
+  conversion, radix-power squaring, recursive quotient blocks, short-quotient
+  division, and reuse of Barrett reciprocals with cyclic correction products.
+  This is an independent Plenty implementation.

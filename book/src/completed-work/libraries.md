@@ -175,6 +175,21 @@ trace, elapsed times, and differential checks are in
 `experiments/bigint-comparison/radix-parse/`. Issue #987 tracks the
 remaining conversion and arithmetic latency gap.
 
+### Bigint short-quotient division and skewed products (issue #987)
+
+Large, unequal products split the longer input into blocks where
+full-size blocks can use the packed transform. The overlapping partial
+products reuse one scratch row. Large divisors with short quotients can
+use the existing recursive quotient estimate when the correction
+product can use a direct or blocked transform.
+
+Regressions in both compiler modes cover saturated and two-step
+quotient correction, signed floor division with skipped low limbs,
+and multiplication carries across block boundaries. The elapsed-time
+sweep and independent checks are in
+`experiments/bigint-comparison/short-division/`. Issue #987 tracks
+the remaining gap and scratch reuse inside recursive multiplication.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

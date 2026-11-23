@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 
-def workloads(bits, rng):
+def workloads(bits, rng, shape_sweep):
     a, b, q = [(1 << (bits - 1)) | rng.getrandbits(bits - 1) for _ in range(3)]
     yield "balanced", "div", b * q + 42, b, 10
     yield "short", "div", b * (q >> (bits - bits // 4)) + 42, b, 10
@@ -21,6 +21,12 @@ def workloads(bits, rng):
         ("octal", 8), ("hex", 16),
     ]:
         yield case, "parse", a, b, radix
+    if shape_sweep:
+        for denominator in (2, 3, 8, 16):
+            q_short = q >> (bits - bits // denominator)
+            yield f"quotient-1-{denominator}", "div", b * q_short + 42, b, 10
+        for ratio in (2, 3, 4, 8, 16):
+            yield f"ratio-{ratio}", "mul", a, b >> (bits - bits // ratio), 10
 
 
 def measure(args, engines, path, writer):
@@ -30,7 +36,7 @@ def measure(args, engines, path, writer):
     divisor = path / "b.hex"
     for bits in args.bits:
         count = max(2, min(16384, 2**21 // bits))
-        for case, operation, a, b, radix in workloads(bits, operands):
+        for case, operation, a, b, radix in workloads(bits, operands, args.shape_sweep):
             if args.cases and f"{operation}/{case}" not in args.cases:
                 continue
             numerator.write_text(f"{a:x}")
@@ -68,6 +74,7 @@ def main():
         default=[8192, 65536, 131072, 262144, 524288, 1048576],
     )
     parser.add_argument("--cases", nargs="+", metavar="OPERATION/CASE")
+    parser.add_argument("--shape-sweep", action="store_true", help="include additional division and multiplication ratios")
     args = parser.parse_args()
     engines = {name: Path(binary).resolve() for name, binary in (engine.split("=", 1) for engine in args.engines)}
     with tempfile.TemporaryDirectory() as work, args.output.open("w", newline="") as output:

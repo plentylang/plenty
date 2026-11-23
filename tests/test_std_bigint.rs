@@ -364,6 +364,48 @@ fn recursive_division_handles_a_saturated_quotient_block() {
 }
 
 #[test]
+fn short_quotient_division_corrects_the_truncated_estimate() {
+    let body = r#"    one = from_i64(1)
+    divisor = ((one << 262143)? + ((one << 196608)? - one)?)?
+    block = (one << 65536)?
+    shifted = (divisor << 65536)?
+    # The leading limbs estimate block - 2, two more than the true quotient.
+    three_divisors = ((divisor << 1)? + divisor)?
+    a = ((shifted - three_divisors)? - one)?
+    (q, r) = a.checked_divmod(&divisor)?
+    remainder = (divisor - one)?
+    print(q == (block - from_i64(4))?, r == remainder)?
+    # The truncated estimate saturates when the leading prefixes are equal.
+    (max_q, max_r) = (shifted - one)?.checked_divmod(&divisor)?
+    print(max_q == (block - one)?, max_r == remainder)?
+    # Normalization shifts a non-word-aligned divisor and leaves low limbs
+    # out of the division. Retain those bits in signed floor correction.
+    scaled_divisor = (divisor << 68)?
+    scaled_a = ((a << 68)? + ((one << 68)? - one)?)?
+    (floor, modulus) = (-scaled_a)?.checked_divmod(&scaled_divisor)?
+    print(floor == (from_i64(3) - block)?, modulus == one)?
+"#;
+    let expected = "True True\n".repeat(3);
+    assert_eq!(run(body, false), expected);
+    assert_eq!(run(body, true), expected);
+}
+
+#[test]
+fn skewed_multiplication_carries_across_blocks_and_a_short_tail() {
+    let body = r#"    one = from_i64(1)
+    short_base = (one << 65536)?
+    long_base = (one << 197696)?
+    short = (short_base - one)?
+    long = (long_base - one)?
+    # Expand (2^65536 - 1) * (2^197696 - 1) without multiplication.
+    expected = ((((one << 263232)? - long_base)? - short_base)? + one)?
+    print((short * long)? == expected, (long * (-short)?)? == (-expected)?)?
+"#;
+    assert_eq!(run(body, false), "True True\n");
+    assert_eq!(run(body, true), "True True\n");
+}
+
+#[test]
 fn decimal_render_reuses_a_large_split_power_at_the_exact_cap() {
     let body = r#"    text = "98765432101234567890".repeat(15800)?
     value = parse(text, 10, 316000)?

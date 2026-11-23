@@ -869,7 +869,8 @@ def add_shifted(out: &mut [u64], value: &[u64], offset: i64) -> ():
 def multiply(a: &[u64], b: &[u64]) -> Result[list[u64], AllocError]:
     unchecked:
         mut out = zeros(len(a) + len(b))?
-        if len(a) < 32 or len(b) < 32 or len(a) > 2 * len(b) or len(b) > 2 * len(a):
+        shorter = len(a) if len(a) < len(b) else len(b)
+        if shorter < 32 or (shorter < TRANSFORM_MIN_LIMBS and len(out) > 3 * shorter):
             multiply_schoolbook(a, b, &mut out)
         else:
             multiply_into(a, b, &mut out)?
@@ -885,6 +886,10 @@ def multiply_into(a: &[u64], b: &[u64], out: &mut [u64]) -> Result[(), AllocErro
         n = len(a) if len(a) > len(b) else len(b)
         third = (n + 2) // 3
         shorter = len(a) if len(a) < len(b) else len(b)
+        if use_skewed_product(n, shorter):
+            if len(a) > len(b):
+                return multiply_skewed_into(a, b, out)
+            return multiply_skewed_into(b, a, out)
         if n >= 128 and len(a) > 2 * third and len(b) > 2 * third and 4 * n <= 5 * shorter:
             return multiply_toom3_into(a, b, third, out)
         if len(a) >= 32 and len(b) >= 32 and len(a) <= 2 * len(b) and len(b) <= 2 * len(a):
@@ -901,6 +906,26 @@ def multiply_into(a: &[u64], b: &[u64], out: &mut [u64]) -> Result[(), AllocErro
             add_shifted(out, &middle, half)
         else:
             multiply_schoolbook(a, b, out)
+        Ok(())
+
+# With a short operand of k limbs, each long-operand block contributes
+# a product of up to 2k limbs shifted by its starting index. The first
+# block can write directly to the zeroed output. Reuse one scratch row
+# for the following blocks because their products overlap the output.
+def multiply_skewed_into(longer: &[u64], shorter: &[u64], out: &mut [u64]) -> Result[(), AllocError]:
+    unchecked:
+        width = len(shorter)
+        multiply_into(&longer[:width], shorter, &mut out[:2 * width])?
+        mut scratch = zeros(2 * width)?
+        mut start = width
+        while start < len(longer):
+            size = len(longer) - start
+            count = width if width < size else size
+            product = &mut scratch[:width + count]
+            clear_words(product)
+            multiply_into(&longer[start:start + count], shorter, &mut product)?
+            add_shifted(out, product, start)
+            start += count
         Ok(())
 
 # Toom-3 evaluates the limb polynomials at 0, 1, -1, 2 and infinity.
@@ -1040,10 +1065,11 @@ def divide_words_three(value: &mut [u64]) -> ():
 # Full transforms have a power-of-two padding cost. Retain recursion in the
 # sparsely occupied band after each size jump, as well as for small/unbalanced
 # inputs. The retained capacity bound is within all five prime root orders.
+const TRANSFORM_MIN_LIMBS: i64 = 1024
 const MAX_TRANSFORM_WORDS: i64 = 524288
 
 def use_transform(a: i64, b: i64) -> bool:
-    if a < 1024 or b < 1024:
+    if a < TRANSFORM_MIN_LIMBS or b < TRANSFORM_MIN_LIMBS:
         return False
     if a > MAX_TRANSFORM_WORDS or b > MAX_TRANSFORM_WORDS:
         return False
@@ -1055,6 +1081,10 @@ def use_transform(a: i64, b: i64) -> bool:
         while n < digits:
             n *= 2
         digits >= 5 * (n // 8)
+
+def use_skewed_product(longer: i64, shorter: i64) -> bool:
+    unchecked:
+        longer > 2 * shorter and use_transform(shorter, shorter)
 
 def copy_words(source: &[u64], out: &mut [u64]) -> ():
     for i in range(len(out)):
@@ -1487,7 +1517,15 @@ def divide_normalized(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u64, blo
     unchecked:
         n = len(v)
         high = len(q) - 1
-        if n < 2 * block_limbs or high < block_limbs or high < n // 2:
+        if n < 2 * block_limbs or high < block_limbs:
+            divide_wide_digits(u, v, q, inverse)
+            return Ok(())
+        # For a short quotient, the first estimate divides the top 2k
+        # dividend limbs by the top k divisor limbs. Its correction
+        # multiplies k by n-k limbs. Use this path when that product can
+        # use transforms, including a skewed product in full-width tiles.
+        omitted = n - high
+        if high < n // 2 and not (use_transform(high, omitted) or use_skewed_product(omitted, high)):
             divide_wide_digits(u, v, q, inverse)
             return Ok(())
         # The extra dividend limb may be nonzero after normalization.
