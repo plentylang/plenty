@@ -23,7 +23,7 @@ for k in range((1 << 20) - 1, 1, -2):
         if len(primes) == 5:
             break
 source = (Path(__file__).resolve().parents[3] / 'stdlib/std/bigint.plenty').read_text()
-calls = [line for line in source.splitlines() if line.strip().startswith('transform_wide_product(a, b,')]
+calls = [line for line in source.splitlines() if line.strip().startswith('TransformPrime(')]
 expected = [[d[key] for key in ('p','witness','inverse','r','r2','r3')] for d in primes]
 assert [[int(n) for n in re.findall(r'(\d+)u64', line)] for line in calls] == expected
 # Verify the literal mixed-radix inverses too, rather than proving a parallel

@@ -27,6 +27,13 @@ def workloads(bits, rng, shape_sweep):
             yield f"quotient-1-{denominator}", "div", b * q_short + 42, b, 10
         for ratio in (2, 3, 4, 8, 16):
             yield f"ratio-{ratio}", "mul", a, b >> (bits - bits // ratio), 10
+        q_long = q
+        for ratio in (2, 3):
+            # bench.plenty accepts at most one million hex digits per input.
+            if (ratio + 1) * bits > 4_000_000:
+                break
+            q_long = (q_long << bits) | a
+            yield f"quotient-{ratio}", "div", b * q_long + 42, b, 10
 
 
 def measure(args, engines, path, writer):
