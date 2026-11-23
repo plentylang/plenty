@@ -972,6 +972,33 @@ print(str.repr(c)?)?
 
 #[cfg(feature = "runtime-checks")]
 #[test]
+fn base64_append_reserves_before_touching_the_prefix() {
+    let source = program(
+        r#"
+owner = std.alloc.system()
+mut msg = owner.bytes_with_capacity(6)?
+msg.extend(b"H:")?
+print("__test_fail_allocations_after_0__")?
+std.encoding.append_base64(&mut msg, b"hi")?
+failed = std.encoding.append_base64(&mut msg, b"z")
+print("__test_restore_allocations__")?
+print(failed.is_err(), msg.len(), msg.to_text()?)?
+std.encoding.append_base64(&mut msg, b"z")?
+std.encoding.append_base64(&mut msg, b"")?
+print(msg.to_text()?)?
+"#,
+    );
+    let source = format!("import std.alloc\n{source}");
+    for optimize in [false, true] {
+        assert_eq!(
+            output_with_optimization(&source, optimize),
+            "True 6 H:aGk=\nH:aGk=eg=="
+        );
+    }
+}
+
+#[cfg(feature = "runtime-checks")]
+#[test]
 fn base64_text_stages_bytes_even_for_an_inline_result() {
     // Same five input bytes: seven symbols fit inline, eight need a text block.
     // Both first need backing and an owner for the encoded Bytes.

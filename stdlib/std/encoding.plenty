@@ -671,11 +671,20 @@ def sextet(code: i64, url: bool) -> i64:
         -1
 
 def encode64(source: &[u8], url: bool) -> Result[Bytes, EncodingError]:
+    mut encoded = std.bytes.with_capacity(base64_capacity(len(source), url)?).map_error(EncodingError.Allocation)?
+    fill64(&mut encoded, source, url)?
+    Ok(encoded)
+
+pub def append_base64(target: &mut Bytes, source: &[u8]) -> Result[(), EncodingError]:
+    target.reserve(base64_capacity(len(source), False)?).map_error(EncodingError.Allocation)?
+    fill64(target, source, False)
+
+# The caller reserved every output byte, including padding, before emission.
+def fill64(target: &mut Bytes, source: &[u8], url: bool) -> Result[(), EncodingError]:
     # Splitting a nonnegative length by a positive constant is infallible.
     split = unchecked:
         (len(source) // 3, len(source) % 3)
     groups, tail = split
-    mut encoded = std.bytes.with_capacity(base64_capacity(len(source), url)?).map_error(EncodingError.Allocation)?
     # Complete groups bound index + 2; the remaining tail is 1 or 2 bytes.
     unchecked:
         for group in range(groups):
@@ -683,24 +692,24 @@ def encode64(source: &[u8], url: bool) -> Result[Bytes, EncodingError]:
             first = i64(source[index])
             second = i64(source[index + 1])
             third = i64(source[index + 2])
-            emit(&mut encoded, symbol(first >> 2, url))?
-            emit(&mut encoded, symbol((first & 3) << 4 | second >> 4, url))?
-            emit(&mut encoded, symbol((second & 15) << 2 | third >> 6, url))?
-            emit(&mut encoded, symbol(third & 63, url))?
+            emit(target, symbol(first >> 2, url))?
+            emit(target, symbol((first & 3) << 4 | second >> 4, url))?
+            emit(target, symbol((second & 15) << 2 | third >> 6, url))?
+            emit(target, symbol(third & 63, url))?
         if tail > 0:
             index = len(source) - tail
             first = i64(source[index])
-            emit(&mut encoded, symbol(first >> 2, url))?
+            emit(target, symbol(first >> 2, url))?
             if tail == 1:
-                emit(&mut encoded, symbol((first & 3) << 4, url))?
+                emit(target, symbol((first & 3) << 4, url))?
             else:
                 second = i64(source[index + 1])
-                emit(&mut encoded, symbol((first & 3) << 4 | second >> 4, url))?
-                emit(&mut encoded, symbol((second & 15) << 2, url))?
+                emit(target, symbol((first & 3) << 4 | second >> 4, url))?
+                emit(target, symbol((second & 15) << 2, url))?
             if not url:
                 for _ in range(3 - tail):
-                    emit(&mut encoded, 61)?
-    Ok(encoded)
+                    emit(target, 61)?
+    Ok(())
 
 # One symbol, or the error naming its index. `=` is a padding error wherever
 # the caller did not already strip it.

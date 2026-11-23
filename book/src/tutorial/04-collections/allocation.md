@@ -354,6 +354,31 @@ def main() -> Result[(), AllocError | IoError]:
 [[2], [1]]
 ```
 
+## Assemble a message in a reusable buffer
+
+Choose storage at construction. For an ordinary buffer, use
+`std.bytes.with_capacity(0)?` instead; the message-building code stays the same.
+
+```plenty
+import std.alloc as alloc
+import std.encoding as encoding
+from std.bytes import BytesError
+
+def main() -> Result[(), AllocError | encoding.EncodingError | BytesError | IoError]:
+    out = alloc.system()
+    mut message = out.bytes_with_capacity(0)?
+    message.extend(b"H:")?
+    encoding.append_base64(&mut message, b"hi")?
+    print(message.to_text()?)?
+    Ok(())
+```
+```output
+H:aGk=
+```
+
+Zero means no initial capacity, not a size limit. A failed Base64 append
+leaves the header intact; it never emits a partial suffix.
+
 ## Keep part of a byte frame
 
 Suppose a frame wraps its payload in brackets. To save the payload in reverse

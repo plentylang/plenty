@@ -417,7 +417,7 @@ fn indirect_standard_calls_keep_the_dynamic_call_site() {
     )]);
     assert!(
         error.starts_with(
-            "error: std/encoding.plenty:802:13: unpack: offset outside source buffer\n"
+            "error: std/encoding.plenty:811:13: unpack: offset outside source buffer\n"
         ),
         "{error}"
     );
@@ -536,12 +536,12 @@ fn scheduled_integer_abs_returns_its_declared_overflow(#[case] optimize: bool) {
 #[case::direct(
     "    print(unpack_i64(b\"12345678\", 1 + 0, Endian.Little))?\n",
     "4:11",
-    "error: std/encoding.plenty:802:13: unpack: offset outside source buffer\n"
+    "error: std/encoding.plenty:811:13: unpack: offset outside source buffer\n"
 )]
 #[case::boxed(
     "    f = BoxedCallable(unpack_i64)?\n    print(f(b\"12345678\", 1 + 0, Endian.Little))?\n",
     "5:11",
-    "error: std/encoding.plenty:802:13: unpack: offset outside source buffer\n"
+    "error: std/encoding.plenty:811:13: unpack: offset outside source buffer\n"
 )]
 #[case::closure(
     "    source = from_bytes(b\"*\")?\n    k = 0\n    f = def [k](source: &Bytes, x: i64) -> u8:\n        offset = unchecked:\n            x + k\n        source.get(offset)\n    print(f(source, 1))?\n",

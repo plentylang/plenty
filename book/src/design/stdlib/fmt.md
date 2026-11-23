@@ -10,6 +10,8 @@ reflection, format-string interpreter, or dynamic writer object.
 this module, and `out.format(f"...")` writes one to a formatter `out` without an
 intermediate `str`.
 
+To separate field temporaries from result storage, see [Choose storage for a task](alloc.md#choose-storage-for-a-task).
+
 The same formatter serves [`std.report`](report.md): its writer-generic
 `Formattable.format` protocol shares these methods and errors.
 `stderr_formatter(max_bytes, max_depth)` creates a `Formatter[Stderr]` without

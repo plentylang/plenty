@@ -5,6 +5,8 @@ Lists use the [common collection rules](collections.md). Growth through
 nothing and traps on a missing index. Lists have no `*` repetition; a
 comprehension such as `[0.0 for _ in range(count)]?` builds repeated elements.
 
+To select storage at construction without changing how you append, see [Choose storage for a task](../../stdlib/alloc.md#choose-storage-for-a-task).
+
 Inside `for` and `while` loops, scalar indexing of a named list already in
 scope reads the list's length and row address once, before the loop, and then
 uses checked direct loads and stores. An immutable shared reference always

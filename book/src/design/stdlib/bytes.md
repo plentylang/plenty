@@ -9,6 +9,8 @@ references; its capacity is rounded to allocation units as described under
 Bytes are never text: converting to `str` is an explicit operation, validated
 by default or [lossy](#lossy-text) on request.
 
+For an empty selected buffer use `out.bytes_with_capacity(n)?`. As with `std.bytes.with_capacity(n)?`, zero is valid and negative capacity returns `AllocError.CapacityOverflow`. To reuse a buffer with ordinary or selected storage, see [Choose storage for a task](alloc.md#choose-storage-for-a-task).
+
 The module is embedded Plenty code over a private native storage owner. It is
 available on the supported x86-64 Linux GNU target.
 

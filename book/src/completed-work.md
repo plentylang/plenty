@@ -3,6 +3,7 @@
 Delivery history and retired backlog entries live here, separate from the
 [backlog](backlog.md), which is the single maintained list of future work.
 
+- [Storage selection guide](completed-work/language-and-tooling.md#storage-selection-guide).
 - [Dictionary key transfer](completed-work/language-and-tooling.md#dictionary-key-transfer).
 - [Selected dictionary values](completed-work/language-and-tooling.md#selected-dictionary-values).
 - [Consuming list storage](completed-work/language-and-tooling.md#consuming-list-storage).

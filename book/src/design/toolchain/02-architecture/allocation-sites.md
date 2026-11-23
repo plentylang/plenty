@@ -32,6 +32,8 @@ This trace excludes MIME wrapping, PEM and custom alphabets.
 | `_from_text(text: &strview)` | `text.as_bytes()` lends the UTF-8 range directly to `decode64`. | Same as `_decode`; no input copy. |
 | `_text(source: &[u8])` | The `Bytes` from `encode64` is **staging**. `Bytes.to_text` borrows it via `text_in` / `__bytes_to_text`; the runtime copies its ASCII bytes into text. | Only the `str`: up to seven bytes inline, otherwise one ordinary text block. The staging owner dies on success or refusal. |
 
+`append_base64` differs from the returning codecs: it checks the padded size, reserves the entire suffix on the existing destination and emits directly. Empty or already-reserved output needs no new allocation. `Allocator.bytes_with_capacity(n)` constructs an empty selected owner and reserves its backing through that owner; refusal releases provisional storage.
+
 One logical `Bytes` is not one allocation. `std.bytes.with_capacity` calls
 `__bytes_new`; opcode 170 in `plenty-runtime/src/aggregates/byte_storage.rs`
 calls `create`, reserving `Vec<u8>` backing before allocating the `Storage`
