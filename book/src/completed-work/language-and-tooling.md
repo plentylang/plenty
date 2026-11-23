@@ -7,6 +7,13 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Base64 allocation audit
+
+Traced the ordinary Base64 and Base64url byte and text functions from borrowed
+input to [packed output and text staging](../design/toolchain/02-architecture/allocation-sites.md#base64-packed-result-or-text-staging).
+The text allocation budget test distinguishes inline output from allocation-free
+encoding. No public API changed; selecting the codec buffer remains in [B13](../backlog.md#b13-coverage-checklist).
+
 ### Selected structural field scratch
 
 The [field audit](../design/toolchain/02-architecture/allocation-sites.md#who-pays-for-an-f-string-field)
