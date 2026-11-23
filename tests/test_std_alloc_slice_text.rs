@@ -1104,3 +1104,21 @@ fn final_allocator_release_in_pool_job_accounts_for_hidden_text_at_result_and_sh
         );
     }
 }
+
+#[test]
+fn format_in_borrows_one_scratch_argument_for_the_literal() {
+    assert_stdout(
+        &format!(
+            r#"{POLICY}
+import std.fmt as fmt
+
+def main() -> Result[(), FormatError | IoError]:
+    mut out = fmt.string_formatter(32, 4)?
+    out.format_in(&budget("unused", 0), f"{{3:>4}}/{{True}}")?
+    print(fmt.finish(&out)?)?
+    Ok(())
+"#
+        ),
+        "unused 0 0\n   3/True\n",
+    );
+}

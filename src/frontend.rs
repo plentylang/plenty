@@ -2186,8 +2186,8 @@ impl Lower<'_> {
         if let Some(result) = self.text_range_method(base, name, args, ops) {
             return result;
         }
-        if name == "format"
-            && let Some(ty) = self.format_method(base, args, &e.at, ops)
+        if matches!(name.as_str(), "format" | "format_in")
+            && let Some(ty) = self.format_method(base, name, args, &e.at, ops)
         {
             return ty;
         }

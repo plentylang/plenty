@@ -154,6 +154,17 @@ const DEPTH: &str = "32";
 /// f-strings have no byte budget; only allocation failure bounds them.
 const NO_BUDGET: &str = "9223372036854775807";
 const OUT: &str = "__plenty_out";
+const SCRATCH: &str = "__plenty_scratch";
+
+/// Selected fields borrow the same scratch argument throughout one literal.
+/// Quantity methods differ only in receiver/formatter evaluation order.
+#[derive(Clone, Copy)]
+enum Site<'a> {
+    Ordinary,
+    Selected(&'a Expr),
+    Quantity(&'a str),
+}
+
 /// std's `__repr_if_formattable(value)`; see [`Lower::repr_if_formattable`].
 pub(super) const REPR_IF_FORMATTABLE: &str = "__repr_if_formattable";
 /// Widths and precisions are static; this keeps generated spellings bounded.
@@ -1191,7 +1202,7 @@ impl Lower<'_> {
     ) -> Result<Type> {
         let start = self.locals.len();
         let call_start = ops.len();
-        let built = self.format_literal(template, values, None, "", at, ops)?;
+        let built = self.format_literal(template, values, None, Site::Ordinary, at, ops)?;
         let callee = ops[call_start..]
             .iter()
             .rev()
@@ -1254,21 +1265,27 @@ impl Lower<'_> {
     pub(super) fn format_method(
         &mut self,
         base: &Expr,
+        method: &str,
         args: &[Expr],
         at: &Token,
         ops: &mut Vec<Op>,
     ) -> Option<Result<Type>> {
         let reference = formatter(self.expression_type_hint(base).as_ref()?)?;
-        let [
-            Expr {
-                kind: Expression::Format(format),
-                at: literal_at,
-            },
-        ] = args
+        let (literal, site) = match (method, args) {
+            ("format", [literal]) => (Some(literal), Site::Ordinary),
+            ("format_in", [scratch, literal]) => (Some(literal), Site::Selected(scratch)),
+            _ => (None, Site::Ordinary),
+        };
+        let Some(Expr {
+            kind: Expression::Format(format),
+            at: literal_at,
+        }) = literal
         else {
-            return Some(Err(at.error(
-                "`Formatter.format` takes one f-string literal, as in `out.format(f\"{x}\")`",
-            )));
+            return Some(Err(at.error(if method == "format_in" {
+                "`Formatter.format_in` takes a scratch allocator reference and an f-string literal"
+            } else {
+                "`Formatter.format` takes one f-string literal, as in `out.format(f\"{x}\")`"
+            })));
         };
         let Format::Literal(template, values) = &**format else {
             unreachable!("only generated functions contain field writes")
@@ -1297,9 +1314,16 @@ impl Lower<'_> {
                 }
             }
             let template = Arc::new(Template { pieces });
-            return Some(self.format_literal(&template, values, Some(target), "", &site, ops));
+            return Some(self.format_literal(
+                &template,
+                values,
+                Some(target),
+                Site::Ordinary,
+                &site,
+                ops,
+            ));
         }
-        Some(self.format_literal(template, values, Some(target), "", literal_at, ops))
+        Some(self.format_literal(template, values, Some(target), site, literal_at, ops))
     }
 
     /// Quantity's builtin writer methods share the ordinary f-string lowering,
@@ -1338,7 +1362,7 @@ impl Lower<'_> {
             &template,
             std::slice::from_ref(base),
             Some(target.clone()),
-            method,
+            Site::Quantity(method),
             at,
             ops,
         ))
@@ -1351,7 +1375,7 @@ impl Lower<'_> {
         template: &Arc<Template>,
         values: &[Expr],
         target: Option<Expr>,
-        purpose: &str,
+        site: Site<'_>,
         at: &Token,
         ops: &mut Vec<Op>,
     ) -> Result<Type> {
@@ -1370,12 +1394,19 @@ impl Lower<'_> {
                 }
             })
             .collect();
+        let purpose = match site {
+            Site::Ordinary => "",
+            Site::Quantity(method) => method,
+            Site::Selected(_) => "_in",
+        };
+        let selected = matches!(site, Site::Selected(_));
         let name = format!("{}{purpose}", symbol(at, target.is_some()));
         if !self.generics.templates.contains_key(&name) {
-            let mut function = format_function(&name, template, target.is_some(), &views, at);
+            let mut function =
+                format_function(&name, template, target.is_some(), selected, &views, at);
             // A Quantity method evaluates its receiver before its writer
             // argument; Formatter.format evaluates the formatter first.
-            if !purpose.is_empty() {
+            if matches!(site, Site::Quantity(_)) {
                 function.inputs.swap(0, 1);
             }
             self.generics.validate_template(&function, self.aliases)?;
@@ -1397,10 +1428,13 @@ impl Lower<'_> {
             })
             .collect();
         if let Some(target) = target {
-            if purpose.is_empty() {
-                args.insert(0, target);
-            } else {
-                args.push(target);
+            match site {
+                Site::Ordinary => args.insert(0, target),
+                Site::Selected(scratch) => {
+                    args.insert(0, scratch.clone());
+                    args.insert(0, target);
+                }
+                Site::Quantity(_) => args.push(target),
             }
         }
         self.generic_call(&name, None, &args, at, ops)
@@ -1591,7 +1625,14 @@ impl Lower<'_> {
         let quantity_debug =
             (quantity.is_some() && field.conversion == Conversion::Repr && spec.is_none())
                 .then(|| ty.to_string());
+        let selected = self.names.contains_key(SCRATCH);
+        let unsupported = || {
+            at.error("`Formatter.format_in` does not yet support selected scratch for this field spelling")
+        };
         if quantity.is_some() && field.conversion == Conversion::Str {
+            if selected {
+                return Err(unsupported());
+            }
             if let Some(spec) = &spec {
                 spec.check(&Category::Text, &ty, at)?;
             }
@@ -1680,7 +1721,13 @@ impl Lower<'_> {
                 vec![text_value, spec_value(spec)],
             )
         };
+        if selected && field.conversion == Conversion::Ascii {
+            return Err(unsupported());
+        }
         if ty == text_view() {
+            if selected && field.conversion == Conversion::Repr && spec.is_none() {
+                return Err(unsupported());
+            }
             return text_view_field(field, value, spec.as_ref(), &ty, &nested);
         }
         if field.conversion == Conversion::Ascii {
@@ -1717,6 +1764,13 @@ impl Lower<'_> {
             (Conversion::Repr, Category::Method) => Category::Method,
             _ => Category::Repr,
         };
+        // Explicit scratch never routes a field through an ordinary collector.
+        if selected
+            && (matches!(category, Category::Repr)
+                || (matches!(category, Category::Method) && spec.is_some()))
+        {
+            return Err(unsupported());
+        }
         let repr_text = field.conversion == Conversion::Repr && matches!(ty, Ty::Str);
         if let Some(spec) = &spec {
             let checked = if repr_text {
@@ -1935,6 +1989,7 @@ fn format_function(
     symbol: &str,
     template: &Arc<Template>,
     write: bool,
+    selected: bool,
     views: &[Lent],
     at: &Token,
 ) -> Function {
@@ -1957,6 +2012,14 @@ fn format_function(
                 )],
             ),
         ));
+        if selected {
+            let allocator = "__plenty_A";
+            type_params.push((allocator.into(), None));
+            inputs.push((
+                SCRATCH.into(),
+                type_ref(at, "&", vec![type_ref(at, allocator, vec![])]),
+            ));
+        }
     } else {
         body.push(Stmt {
             at: at.clone(),
