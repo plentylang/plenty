@@ -972,6 +972,52 @@ print(str.repr(c)?)?
 
 #[cfg(feature = "runtime-checks")]
 #[test]
+fn base64_decode_append_preserves_prefix_capacity_and_error_order() {
+    for (constructor, capacity) in [
+        ("std.bytes.with_capacity", 2),
+        ("std.bytes.with_capacity", 7),
+        ("std.alloc.system().bytes_with_capacity", 2),
+        ("std.alloc.system().bytes_with_capacity", 7),
+    ] {
+        let body = format!(
+            r#"
+mut dest = {constructor}({capacity})?
+dest.extend(b"H:")?
+before = dest.capacity()
+print("__test_begin_no_allocations__")?
+bad = std.encoding.base64_decode_append(b"aGVsbG9=", &mut dest)
+print("__test_end_no_allocations__")?
+print(str.repr(bad)?, dest.len(), before == dest.capacity(), dest.to_text()?)?
+print("__test_fail_allocations_after_0__")?
+good = std.encoding.base64_decode_append(b"aGVsbG8=", &mut dest)
+print("__test_restore_allocations__")?
+print(good.is_ok(), before == dest.capacity(), dest.to_text()?)?
+if good.is_err():
+    std.encoding.base64_decode_append(b"aGVsbG8=", &mut dest)?
+print(dest.to_text()?)?
+dest.clear()
+std.encoding.base64_decode_append(b"", &mut dest)?
+std.encoding.base64_decode_append(b"eg==", &mut dest)?
+print(dest.to_text()?)?
+"#
+        );
+        let source = format!("import std.alloc\n{}", program(&body));
+        let growth = if capacity == 2 {
+            "False True H:"
+        } else {
+            "True True H:hello"
+        };
+        for optimize in [false, true] {
+            assert_eq!(
+                output_with_optimization(&source, optimize),
+                format!("Result[(), E].Err(E.NonCanonical(6)) 2 True H:\n{growth}\nH:hello\nz")
+            );
+        }
+    }
+}
+
+#[cfg(feature = "runtime-checks")]
+#[test]
 fn base64_append_reserves_before_touching_the_prefix() {
     let source = program(
         r#"

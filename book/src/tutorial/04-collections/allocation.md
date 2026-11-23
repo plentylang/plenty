@@ -379,6 +379,28 @@ H:aGk=
 Zero means no initial capacity, not a size limit. A failed Base64 append
 leaves the header intact; it never emits a partial suffix.
 
+To append decoded bytes after a header, leave the buffer alone. To start
+another message, clear it first: the length becomes zero but capacity stays.
+
+```plenty
+import std.bytes
+import std.encoding as encoding
+
+def main() -> Result[(), AllocError | encoding.EncodingError | std.bytes.BytesError | IoError]:
+    mut message = std.bytes.with_capacity(7)?
+    message.extend(b"H:")?
+    encoding.base64_decode_append(b"aGVsbG8=", &mut message)?
+    print(message.to_text()?)?
+    message.clear()
+    encoding.base64_decode_append(b"aGk=", &mut message)?
+    print(message.to_text()?)?
+    Ok(())
+```
+```output
+H:hello
+hi
+```
+
 ## Keep part of a byte frame
 
 Suppose a frame wraps its payload in brackets. To save the payload in reverse

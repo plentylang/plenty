@@ -722,7 +722,7 @@ def symbol_at(source: &[u8], index: i64, url: bool) -> Result[i64, EncodingError
         return Err(EncodingError.InvalidPadding(index))
     Err(EncodingError.InvalidByte(index))
 
-def decode64(source: &[u8], url: bool) -> Result[Bytes, EncodingError]:
+def decode64_shape(source: &[u8], url: bool) -> Result[(i64, i64), EncodingError]:
     # Padding guards bound end; groups/tails and every byte cursor stay within source.
     unchecked:
         mut end = len(source)
@@ -744,21 +744,29 @@ def decode64(source: &[u8], url: bool) -> Result[Bytes, EncodingError]:
         mut size = groups * 3
         if tail > 0:
             size += tail - 1
-        mut decoded = std.bytes.with_capacity(size).map_error(EncodingError.Allocation)?
+        Ok((end, size))
+
+# With emit_bytes false the same checks run without touching the destination.
+def walk64(source: &[u8], url: bool, end: i64, target: &mut Bytes, emit_bytes: bool) -> Result[(), EncodingError]:
+    unchecked:
+        groups = end // 4
+        tail = end % 4
         for group in range(groups):
             index = group * 4
             first = symbol_at(source, index, url)?
             second = symbol_at(source, index + 1, url)?
             third = symbol_at(source, index + 2, url)?
             fourth = symbol_at(source, index + 3, url)?
-            emit(&mut decoded, first << 2 | second >> 4)?
-            emit(&mut decoded, (second & 15) << 4 | third >> 2)?
-            emit(&mut decoded, (third & 3) << 6 | fourth)?
+            if emit_bytes:
+                emit(target, first << 2 | second >> 4)?
+                emit(target, (second & 15) << 4 | third >> 2)?
+                emit(target, (third & 3) << 6 | fourth)?
         if tail > 0:
             index = end - tail
             first = symbol_at(source, index, url)?
             second = symbol_at(source, index + 1, url)?
-            emit(&mut decoded, first << 2 | second >> 4)?
+            if emit_bytes:
+                emit(target, first << 2 | second >> 4)?
             if tail == 2:
                 # Bits that encode no byte must be zero, so each value has one text.
                 if second & 15 != 0:
@@ -767,8 +775,30 @@ def decode64(source: &[u8], url: bool) -> Result[Bytes, EncodingError]:
                 third = symbol_at(source, index + 2, url)?
                 if third & 3 != 0:
                     return Err(EncodingError.NonCanonical(index + 2))
-                emit(&mut decoded, (second & 15) << 4 | third >> 2)?
-        Ok(decoded)
+                if emit_bytes:
+                    emit(target, (second & 15) << 4 | third >> 2)?
+        Ok(())
+
+def decode64(source: &[u8], url: bool) -> Result[Bytes, EncodingError]:
+    end, size = decode64_shape(source, url)?
+    mut decoded = std.bytes.with_capacity(size).map_error(EncodingError.Allocation)?
+    walk64(source, url, end, &mut decoded, True)?
+    Ok(decoded)
+
+pub def base64_decode_append(source: &[u8], target: &mut Bytes) -> Result[(), EncodingError]:
+    end, size = decode64_shape(source, False)?
+    start = target.len()
+    spare = unchecked:
+        target.capacity() - start
+    if size > spare:
+        walk64(source, False, end, target, False)?
+        target.reserve(size).map_error(EncodingError.Allocation)?
+    match walk64(source, False, end, target, True):
+        case Err(error):
+            target.truncate(start)
+            Err(error)
+        case Ok(_):
+            Ok(())
 
 def big(order: Endian) -> bool:
     match order:

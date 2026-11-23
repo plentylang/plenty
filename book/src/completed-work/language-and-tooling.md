@@ -7,6 +7,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Base64 destination decoding
+
+[`base64_decode_append`](../design/stdlib/encoding.md#codecs) decodes into ordinary or selected `Bytes` without a second owner. Malformed input leaves the destination unchanged without requesting growth.
+
 ### Selected byte buffers in the standard library
 
 The selected formatter, byte join and replacement, and streaming text join use
