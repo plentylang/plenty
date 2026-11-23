@@ -453,6 +453,27 @@ fn barrett_cyclic_correction_recovers_limbs_above_the_transform() {
 }
 
 #[test]
+fn barrett_reuses_transforms_for_long_quotient_blocks() {
+    let body = r#"    one = from_i64(1)
+    # The larger divisor has 8256 limbs. Its first quotient uses
+    # three blocks of 8255 limbs against an 8192-limb cyclic modulus.
+    # The second quotient leaves a shorter final block.
+    for (bits, top) in [(524288, 1572671), (524288, 1572927), (528384, 1584959), (528384, 1585215)]?:
+        divisor = ((one << bits)? - one)?
+        quotient = (((one << top)? + (one << 65)?)? - from_i64(2))?
+        high = (divisor << top)?
+        exact = (((high + (divisor << 65)?)?) - (divisor << 1)?)?
+        (q, r) = (exact + from_i64(7))?.checked_divmod(&divisor)?
+        print(q == quotient, r == from_i64(7))?
+        (floor, modulus) = (one - exact)?.checked_divmod(&divisor)?
+        print(floor == (-quotient)?, modulus == one)?
+"#;
+    let expected = "True True\n".repeat(8);
+    assert_eq!(run(body, false), expected);
+    assert_eq!(run(body, true), expected);
+}
+
+#[test]
 fn decimal_render_reuses_a_large_split_power_at_the_exact_cap() {
     let body = r#"    text = "98765432101234567890".repeat(15800)?
     value = parse(text, 10, 316000)?
