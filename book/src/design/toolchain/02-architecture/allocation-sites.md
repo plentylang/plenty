@@ -19,9 +19,9 @@ root; native aggregate functions without a path are in
 ## JSON tree output: encoder storage versus writer storage
 
 `std.json.write_value` borrows the tree and builds the complete representation
-before calling the writer. For `{"k":["a\nb"]}`, the encoder owns three
-ordinary byte buffers: the pending JSON bytes, a nesting stack, and a
-34-byte set identifying characters that need escaping. Keys and text are
+before calling the writer. For `{"k":["a\nb"]}`, the encoder owns two
+ordinary byte buffers: the pending JSON bytes and a nesting stack. The
+34-byte escape set is a read-only literal shared by all encoders. Keys and text are
 borrowed: unescaped runs and escape sequences go into the pending output,
 not a separate quoted string. Spare capacity in the writer cannot serve any
 of those encoder buffers. Allocations inside a writer are its own.

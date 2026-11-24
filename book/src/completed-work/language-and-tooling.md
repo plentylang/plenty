@@ -7,6 +7,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Shared JSON escape set
+
+The encoder scans a static byte literal rather than constructing an owned escape set for each document. Pending output and nesting state still use ordinary buffers.
+
 ### JSON tree writer allocation audit
 
 [Traced encoder and writer storage](../design/toolchain/02-architecture/allocation-sites.md#json-tree-output-encoder-storage-versus-writer-storage). Native coverage separates allocation refusal before the first write from writer failure after an accepted prefix. No API or runtime change.
