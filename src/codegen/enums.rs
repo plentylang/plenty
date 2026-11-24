@@ -803,7 +803,7 @@ impl Lowerer<'_, '_> {
         let success_tag = usize::from(source.is_option());
         let failure = self.bcx.create_block();
         let ty = source.get().variants[success_tag].fields[0].clone();
-        // Returns of an inlined callee known to succeed skip the test.
+        // Arrivals known to hold the success variant can skip the test.
         let bypass = self.bypass_try(value, success_tag as u64, &ty, failure);
         self.seal_joins();
         let payload = self.sum_payload(value);
@@ -822,6 +822,12 @@ impl Lowerer<'_, '_> {
                 match bypass {
                     Some((success, _)) => {
                         let word = self.raw_word(payload);
+                        let param = self.bcx.block_params(success)[0];
+                        let word = if self.bcx.func.dfg.value_type(param) == types::I8 {
+                            self.bcx.ins().ireduce(types::I8, word)
+                        } else {
+                            word
+                        };
                         let word = BlockArg::Value(word);
                         self.bcx.ins().brif(ready, success, &[word], failure, &[]);
                         success

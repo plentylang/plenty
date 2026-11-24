@@ -2999,7 +2999,10 @@ impl Lowerer<'_, '_> {
                     | Op::UseLoan(_)
                     | Op::EndLoan(_)
                     | Op::Access(..)
+                    | Op::Site(_)
+                    | Op::CallerSite(_)
             )
+            && !matches!(op, Op::DropLocal(i) if !self.locals[*i as usize].1.managed())
         {
             self.seal_joins();
         }
@@ -5138,6 +5141,8 @@ impl Lowerer<'_, '_> {
         // count" rule lines up automatically.
         let mut join_param_types: Option<Vec<Ty>> = None;
         let mut any_arm_falls_through = false;
+        let mut track_join = false;
+        let mut arm_joins = Vec::new();
         for (i, arm) in arms.iter().enumerate() {
             self.bcx.switch_to_block(arm_blocks[i]);
             self.bcx.seal_block(arm_blocks[i]);
@@ -5158,12 +5163,17 @@ impl Lowerer<'_, '_> {
             }
             self.tags.known.truncate(known.0);
             self.tags.projections.truncate(known.1);
+            self.joins.suspend(&mut arm_joins);
             if self.terminated {
                 continue;
             }
             any_arm_falls_through = true;
             if join_param_types.is_none() {
                 let types: Vec<Ty> = self.stack.iter().map(|(_, t)| t.clone()).collect();
+                // Managed values can need cleanup at the join. Seal those
+                // joins up front so empty ownership slots resolve to zero.
+                track_join = matches!(&types[..], [ty @ Ty::Enum(sum)]
+                    if sum.propagatable() && !ty.managed());
                 for ty in &types {
                     self.bcx
                         .append_block_param(join_block, clif_type(ty.clone()));
@@ -5177,12 +5187,19 @@ impl Lowerer<'_, '_> {
                 .iter()
                 .map(|(v, _)| BlockArg::Value(*v))
                 .collect();
-            self.bcx.ins().jump(join_block, &args);
+            let jump = self.bcx.ins().jump(join_block, &args);
+            if track_join {
+                self.note_join(join_block, jump);
+            }
         }
 
         // --- Join block ------------------------------------------------------
+        self.joins.resume(arm_joins);
+        if !track_join {
+            self.seal_joins();
+        }
         self.bcx.switch_to_block(join_block);
-        self.bcx.seal_block(join_block);
+        self.seal_join_later(join_block, track_join);
         if any_arm_falls_through {
             // Each arm started from a clone of `entry_stack` and the
             // join block's params carry the *whole* stack the arm ended

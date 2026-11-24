@@ -12,6 +12,40 @@ pub(super) fn method(name: &str) -> bool {
     )
 }
 
+fn sum_cases(
+    at: &Token,
+    option: bool,
+    payload: &str,
+    error: Option<&str>,
+    mapped: Expr,
+    fallback: Expr,
+) -> [enums::Case; 2] {
+    let pattern = |kind| Pat {
+        at: at.clone(),
+        kind,
+    };
+    let variant = |name: &str, fields, body: Expr| enums::Case {
+        at: at.clone(),
+        pattern: pattern(PatKind::Variant(None, name.into(), fields, Pos::default())),
+        body: vec![Stmt {
+            at: body.at.clone(),
+            kind: Statement::Expr(body),
+        }],
+    };
+    let full = variant(
+        if option { "Some" } else { "Ok" },
+        Some(vec![pattern(PatKind::Binding(payload.into()))]),
+        mapped,
+    );
+    let empty = if option {
+        variant("Nothing", None, fallback)
+    } else {
+        let error = error.map_or(PatKind::Wildcard, |name| PatKind::Binding(name.into()));
+        variant("Err", Some(vec![pattern(error)]), fallback)
+    };
+    [full, empty]
+}
+
 impl Lower<'_> {
     pub(super) fn sum_method(
         &mut self,
@@ -74,7 +108,38 @@ impl Lower<'_> {
         if payload.carries_loan() {
             return self.borrowed_sum_method(base, name, args, sum, expected, start, ops);
         }
-        let source_name = self.hide(Ty::Enum(sum.clone()), &base.at, ops)?;
+        let source_ty = Ty::Enum(sum.clone());
+        if name == "map_or"
+            && !source_ty.carries_loan()
+            && !source_ty.managed()
+            && let Expression::Anonymous(mapper) = &ungroup(&args[1]).kind
+            && !mapper.once
+            && !mapper.captures.is_empty()
+            && mapper.captures.iter().all(|capture| {
+                !capture.borrowed
+                    && !capture.mutable
+                    && self
+                        .names
+                        .get(&capture.name)
+                        .is_some_and(|local| closures::scalar_capture(&local.ty))
+            })
+            && mapper.output.resolve(self.aliases)?.is_some_and(|ty| {
+                !ty.managed()
+                    && !ty.carries_loan()
+                    && closures::scalar_capture_reads(mapper, &payload, &ty)
+            })
+        {
+            return self.scalar_map_or(
+                base,
+                [&args[0], &args[1]],
+                mapper,
+                sum,
+                expected,
+                start,
+                ops,
+            );
+        }
+        let source_name = self.hide(source_ty, &base.at, ops)?;
         let mut names = vec![source_name];
         let mut output = if name.starts_with("unwrap_or") {
             Some(payload.clone())
@@ -181,6 +246,81 @@ impl Lower<'_> {
         Ok(result)
     }
 
+    /// An immediate mapper is used only by this match. Keep its eager capture
+    /// snapshots in ordinary locals and call the closure body only in the
+    /// success arm.
+    #[allow(clippy::too_many_arguments)]
+    fn scalar_map_or(
+        &mut self,
+        base: &Expr,
+        [default, mapper]: [&Expr; 2],
+        function: &Function,
+        sum: crate::nominal::Nominal<crate::sum::EnumType>,
+        expected: Type,
+        start: usize,
+        ops: &mut Vec<Op>,
+    ) -> Result<Type> {
+        let at = &base.at;
+        let source = self.hide(Ty::Enum(sum.clone()), at, ops)?;
+        let output = self.stored_value(default, expected, ops)?;
+        let fallback = self.hide(output.clone(), &default.at, ops)?;
+        let payload = sum.get().variants[usize::from(sum.is_option())].fields[0].clone();
+        let mut function = function.clone();
+        // A one-shot closure already receives its owned captures by value.
+        // This mapper only reads scalar captures and the adapter owns its
+        // only call, so reuse that convention without building a closure.
+        function.once = true;
+        let (closure, loans) = self.closure_parts(&function, &ungroup(mapper).at, ops)?;
+        debug_assert!(loans.is_empty());
+        if closure.signature.inputs != [payload.clone()] {
+            return Err(mapper
+                .at
+                .error(format!("map_or callback must take ({payload})")));
+        }
+        self.same(
+            closure.signature.output.clone(),
+            Some(output.clone()),
+            &mapper.at,
+        )?;
+        let mut captures = closure
+            .captures
+            .iter()
+            .rev()
+            .map(|(_, ty)| self.hide(ty.clone(), &mapper.at, ops))
+            .collect::<Result<Vec<_>>>()?;
+        captures.reverse();
+        let name_expr = |name: &str| Expr {
+            at: at.clone(),
+            kind: Expression::Name(name.into()),
+        };
+        let payload_name = format!("__plenty_payload{}", self.locals.len());
+        let mut inputs = captures
+            .iter()
+            .map(|name| name_expr(name))
+            .collect::<Vec<_>>();
+        inputs.push(name_expr(&payload_name));
+        let mapped = Expr {
+            at: mapper.at.clone(),
+            kind: Expression::Call(closure.name.clone(), inputs),
+        };
+        self.branch_adapter = Some(crate::ownership::Adapter::MapOr);
+        let cases = sum_cases(
+            at,
+            sum.is_option(),
+            &payload_name,
+            None,
+            mapped,
+            name_expr(&fallback),
+        );
+        let result = self.match_value(at, &name_expr(&source), &cases, Some(output), ops);
+        for name in captures.iter().chain([&source, &fallback]) {
+            self.names.remove(name);
+        }
+        let result = result?;
+        self.cleanup(start, ops);
+        Ok(result)
+    }
+
     /// A borrowed payload cannot move into a generic helper, which would have
     /// to return a borrow of its own parameter. The method lowers as the
     /// `match` it abbreviates instead, so the payload binding, the callbacks'
@@ -265,43 +405,14 @@ impl Lower<'_> {
             _ if sum.is_result() => call(&operands[0], vec![name_expr(&error_name)]),
             _ => call(&operands[0], vec![]),
         };
-        let binding = |name: &str| Pat {
-            at: at.clone(),
-            kind: PatKind::Binding(name.into()),
-        };
-        let variant = |variant: &str, fields: Option<Vec<Pat>>, body: Expr| enums::Case {
-            at: at.clone(),
-            pattern: Pat {
-                at: at.clone(),
-                kind: PatKind::Variant(None, variant.into(), fields, Pos::default()),
-            },
-            body: vec![Stmt {
-                at: body.at.clone(),
-                kind: Statement::Expr(body),
-            }],
-        };
-        let empty = if sum.is_option() {
-            variant("Nothing", None, fallback)
-        } else if name == "map_or" {
-            let wildcard = Pat {
-                at: at.clone(),
-                kind: PatKind::Wildcard,
-            };
-            variant("Err", Some(vec![wildcard]), fallback)
-        } else {
-            variant("Err", Some(vec![binding(&error_name)]), fallback)
-        };
-        let full = variant(
-            if sum.is_option() { "Some" } else { "Ok" },
-            Some(vec![binding(&payload_name)]),
-            mapped,
-        );
         self.branch_adapter = Some(match name {
             "map_or" => crate::ownership::Adapter::MapOr,
             "map_or_else" => crate::ownership::Adapter::MapOrElse,
             _ => crate::ownership::Adapter::UnwrapOrElse,
         });
-        let result = self.match_value(at, &name_expr(&source), &[full, empty], expected, ops);
+        let error = (name != "map_or").then_some(error_name.as_str());
+        let cases = sum_cases(at, sum.is_option(), &payload_name, error, mapped, fallback);
+        let result = self.match_value(at, &name_expr(&source), &cases, expected, ops);
         for name in hidden {
             self.names.remove(&name);
         }

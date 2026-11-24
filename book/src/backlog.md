@@ -171,6 +171,8 @@ These belong to B17 and are not scheduled implementation commitments:
 
 B19 is evidence-driven; these are candidates, not an approved optimization batch.
 Dominated index-increment overflow elimination is [delivered](completed-work/performance.md#b19-generated-code-and-storage).
+The [immediate sum mapper optimization](completed-work/performance.md#immediate-sum-mappers-issue-1019)
+removes redundant capture copies and tag tests in checked `map_or` chains (issue #1019).
 The [structural n-body study](completed-work/performance.md#n-body-structural-feasibility-issues-929-and-930)
 led to [guarded numerical state and bounded loop expansion](completed-work/performance.md#guarded-numerical-state-issue-930)
 for the original n-body source, to [paired divisions and square roots](completed-work/performance.md#paired-divisions-and-square-roots),

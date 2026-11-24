@@ -77,6 +77,34 @@ def main() -> ():
 }
 
 #[test]
+fn immediate_scalar_mapper_captures_after_the_eager_default() {
+    output(
+        r#"
+def source(present: bool) -> Option[i64]:
+    print("receiver").unwrap()
+    Some(3) if present else Nothing
+
+def fallback(capture: &mut i64) -> Result[i64, OverflowError[i64]]:
+    print("default").unwrap()
+    *capture = *capture + 1
+    Ok(0)
+
+def mapped(present: bool, initial: i64) -> Result[i64, OverflowError[i64]]:
+    mut capture = initial
+    source(present).map_or(
+        Result[i64, OverflowError[i64]].Ok(fallback(&mut capture)?),
+        def [capture](value: i64) -> Result[i64, OverflowError[i64]]: Ok(capture + value),
+    )
+
+def main() -> ():
+    print(mapped(True, 7).unwrap()).unwrap()
+    print(mapped(False, i64.MAX - 1).unwrap()).unwrap()
+"#,
+        "receiver\ndefault\n11\nreceiver\ndefault\n0",
+    );
+}
+
+#[test]
 fn expect_reports_message_and_call_site() {
     let result = run(
         "def main() -> ():\n    result: Result[i64, str] = Err(\"cause\")\n    drop(result.expect(\"configuration required\"))\n",

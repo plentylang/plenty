@@ -1,6 +1,5 @@
-//! A return of an inlined call that is known to hold the success variant
-//! jumps past the caller's `?` test (issue #936); returns known to fail and
-//! returns of unknown values keep their paths.
+//! Success variants from inlined returns and match arms jump past the `?`
+//! tag test. Failure variants and values with unknown tags keep their paths.
 use std::path::Path;
 use std::process::Command;
 
@@ -170,4 +169,78 @@ fn a_known_ok_return_skips_the_tag_test() {
     assert!(!climb.contains("icmp eq"), "{climb}");
     let after = support::asm_body(&clif, "after");
     assert!(after.contains("icmp eq"), "{after}");
+}
+
+const MAPPED_CONDITION: &str = r#"
+def mapped_condition(prior: Option[i64], i: i64, k: i64) -> Result[i64, OverflowError[i64]]:
+    nearby = prior.map_or(
+        Result[bool, OverflowError[i64]].Ok(False),
+        def [i, k](j: i64) -> Result[bool, OverflowError[i64]]: Ok(i - j <= k),
+    )?
+    if nearby:
+        return Ok(1)
+    Ok(2)
+
+def matched(prior: Option[i64], i: i64, k: i64) -> Result[bool, OverflowError[i64]]:
+    match prior:
+        case Some(j):
+            Ok(i - j <= k)
+        case Nothing:
+            Ok(False)
+
+def matched_condition(prior: Option[i64], i: i64, k: i64) -> Result[i64, OverflowError[i64]]:
+    if matched(prior, i, k)?:
+        return Ok(1)
+    Ok(2)
+
+def with_fallback(prior: Option[i64], fallback: Result[bool, OverflowError[i64]], i: i64) -> Result[bool, OverflowError[i64]]:
+    nearby = prior.map_or(fallback, def [i](j: i64) -> Result[bool, OverflowError[i64]]: Ok(i - j <= 2))?
+    Ok(not nearby)
+
+def show(result: Result[i64, OverflowError[i64]]) -> Result[(), IoError]:
+    match result:
+        case Ok(value):
+            print(value)?
+        case Err(_):
+            print("overflow")?
+    Ok(())
+
+def main() -> Result[(), IoError]:
+    absent: Option[i64] = Nothing
+    show(mapped_condition(absent, i64.MIN, 2))?
+    show(mapped_condition(Some(10), 12, 2))?
+    show(mapped_condition(Some(10), 13, 2))?
+    show(mapped_condition(Some(1), i64.MIN, 2))?
+    show(matched_condition(absent, i64.MIN, 2))?
+    show(matched_condition(Some(10), 12, 2))?
+    show(matched_condition(Some(10), 13, 2))?
+    show(matched_condition(Some(1), i64.MIN, 2))?
+    print(with_fallback(absent, Ok(False), 12).unwrap())?
+    print(with_fallback(Some(10), Ok(False), 12).unwrap())?
+    err = with_fallback(Some(1), Ok(False), i64.MIN)
+    print(with_fallback(absent, err, 12).is_err())?
+    Ok(())
+"#;
+
+#[test]
+fn mapped_checked_condition_propagates_overflow_and_branches_on_success() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("main.plenty"), MAPPED_CONDITION).unwrap();
+    for mode in ["--fast-compile", "--release"] {
+        assert_eq!(
+            plenty(dir.path(), &[mode, "main.plenty"]),
+            "2\n1\n2\noverflow\n2\n1\n2\noverflow\nTrue\nFalse\nTrue\n",
+            "{mode}",
+        );
+    }
+
+    plenty(
+        dir.path(),
+        &["--dump", "clif-opt", "main.plenty", "-o", "out"],
+    );
+    let clif = std::fs::read_to_string(dir.path().join("out/clif-opt.txt")).unwrap();
+    let mapped = support::asm_body(&clif, "mapped_condition");
+    assert!(mapped.contains("ssub_overflow"), "{mapped}");
+    assert!(!mapped.contains("icmp eq"), "{mapped}");
+    assert!(!mapped.contains("i64x2"), "{mapped}");
 }

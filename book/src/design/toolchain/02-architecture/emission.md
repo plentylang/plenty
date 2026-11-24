@@ -365,6 +365,12 @@ one-shot captures keep their memory reads; exclusively borrowing a closure local
 also disables its snapshots because an alias could replace the environment.
 The callback's control flow, effects, arithmetic and trap locations are unchanged.
 
+An immediate `map_or` mapper that reads its immutable numeric or boolean
+captures in a scalar expression can receive the snapshots as value parameters.
+The compiler evaluates the receiver, the eager default and the captures in
+that order, then dispatches directly to the mapper from the success arm.
+This applies to unmanaged receivers and return values.
+
 A tail call is inlined only when the caller has no managed locals or has just
 one tail-call site; otherwise it retains the shared tail-exit cleanup, keeping
 code growth linear in the number of owned locals and exits. C string adapter failures also return through
@@ -384,16 +390,14 @@ inner-loop expansion](numerical-loops.md) before last-use analysis.
 
 ## Known returns
 
-An inlined callee's returns jump to one block that takes the returned value,
-and a `?` applied to the call tests that value's tag. Cranelift threads no
-jump through a block parameter, so a return that had just built `Ok(x)` still
-ran the test. When `?` directly follows an inlined call whose `Result` or
-`Option` payload fits one word, `src/codegen/known_returns.rs` moves each
-return that built the success variant to the code after `?`, passing the
-payload (issue #936). A return that built the failure variant keeps its path
-to the caller's failure handling. A return of any other value, such as a
-parameter or a call's result, keeps the test; when there is none, the test is
-not emitted and the remaining path is cold.
+An inlined callee's returns or the arms of a `match` producing an unmanaged
+sum join at a block that takes the constructed sum. When `?` consumes it and its
+success payload fits one word, `src/codegen/known_returns.rs` redirects each
+edge that built the success variant to the code after `?`, passing the
+payload (issues #936 and #1019). A known failure still reaches the caller's
+failure handling. An unknown variant still runs the tag test. When all
+variants are known, failure handling is cold. A successful boolean can feed
+an enclosing condition directly.
 
 The error exits of a `Result`-returning callee's checked arithmetic are
 returns that build `Err`, and a nested inlined call's return block forwards
@@ -413,9 +417,9 @@ overflow exits go to the caller's error return in cold code. Traps, error
 values, cleanup and source positions are unchanged; only the jumps' targets
 differ.
 
-The frontend cannot retarget a jump into a sealed block, so the return block
-of an inlined call and the exit of an inlined checked body stay unsealed
-until the next operation that is not `?`.
+The frontend can retarget only jumps into unsealed blocks. An eligible
+return, checked-body exit or match join stays unsealed until `?` consumes
+its value or another operation starts lowering real work.
 
 ## Last-use moves
 

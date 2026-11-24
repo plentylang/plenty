@@ -1,0 +1,18 @@
+def via_map_or(prior: Option[i64], i: i64, k: i64) -> Result[bool, OverflowError[i64]]:
+    prior.map_or(
+        Result[bool, OverflowError[i64]].Ok(False),
+        def [i, k](j: i64) -> Result[bool, OverflowError[i64]]: Ok(i - j <= k),
+    )
+
+def via_match(prior: Option[i64], i: i64, k: i64) -> Result[bool, OverflowError[i64]]:
+    match prior:
+        case Some(j):
+            Ok(i - j <= k)
+        case Nothing:
+            Ok(False)
+
+def main() -> Result[(), OverflowError[i64] | IoError]:
+    print(via_map_or(Some(10), 12, 2)?, via_match(Some(10), 12, 2)?)?
+    prior: Option[i64] = Nothing
+    print(via_map_or(prior, 12, 2)?, via_match(prior, 12, 2)?)?
+    Ok(())
