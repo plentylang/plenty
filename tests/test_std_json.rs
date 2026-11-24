@@ -1189,6 +1189,29 @@ print(described(std.json.parse(&encoded, &bounds))? == encoded.to_text()?)?
 }
 
 #[test]
+fn every_ascii_control_is_escaped_but_adjacent_text_is_copied() {
+    let source = program(
+        r#"
+mut parts = list[str]()?
+for i in range(32):
+    unchecked:
+        parts.append(chr(u32(i))?)?
+parts.append(" !\"/[\\]é")?
+text = "".join(&parts)?
+bounds = std.json.limits()
+mut encoder = std.json.encoder(&bounds)?
+encoder.text(&text)?
+encoded = encoder.take()?
+print(encoded.to_text()?)?
+"#,
+    );
+    let expected = r#""\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f !\"/[\\]é""#;
+    for optimize in [false, true] {
+        assert_eq!(output_with_optimization(&source, optimize), expected);
+    }
+}
+
+#[test]
 fn the_encoder_rejects_calls_that_do_not_form_a_document() {
     native(
         r#"

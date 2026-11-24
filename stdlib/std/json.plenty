@@ -326,13 +326,6 @@ def plain_bytes() -> Result[Bytes, JsonFault]:
     Ok(set)
 
 # The bytes an encoded string must escape.
-def escaped_bytes() -> Result[Bytes, JsonFault]:
-    mut set = reserved(std.bytes.with_capacity(34))?
-    byte_set(0, 32, &mut set)?
-    push_byte(&mut set, 34)?
-    push_byte(&mut set, 92)?
-    Ok(set)
-
 # The first index in [start, stop) that `found` located, or `stop`.
 def run_end(found: Option[i64], stop: i64) -> i64:
     match found:
@@ -1061,7 +1054,6 @@ pub def find(members: &list[Member], key: &strview) -> Option[i64]:
 pub class Encoder:
     _out: Bytes
     _stack: Bytes
-    _escaped: Bytes
     _state: i64
     _written: i64
     _broken: bool
@@ -1165,7 +1157,9 @@ pub class Encoder:
         count = len(source)
         self.put(34)?
         mut run = 0
-        mut index = run_end(byte_find_set_range(source, &self._escaped, 0, count, True), count)
+        # JSON escapes ASCII controls, double quote and backslash.
+        escaped = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x22\x5c"
+        mut index = run_end(byte_find_set_range(source, escaped, 0, count, True), count)
         while index < count:
             byte = i64(source[index])
             self.extend(&source[run:index])?
@@ -1191,7 +1185,7 @@ pub class Encoder:
             # index < count <= i64.MAX.
             unchecked:
                 run = index + 1
-            index = run_end(byte_find_set_range(source, &self._escaped, run, count, True), count)
+            index = run_end(byte_find_set_range(source, escaped, run, count, True), count)
         self.extend(&source[run:count])?
         self.put(34)
 
@@ -1412,13 +1406,12 @@ pub def encoder(bounds: &Limits, indent: Option[NonNegative[i64]] = Nothing) -> 
         __trap("std.json.encoder: max_depth is above 1024")
     out = unplaced(reserved(std.bytes.empty()))?
     stack = unplaced(reserved(std.bytes.empty()))?
-    escaped = unplaced(escaped_bytes())?
     width = match indent:
         case Some(value):
             value.get()
         case Nothing:
             0
-    Ok(Encoder(out, stack, escaped, emit_top, 0, False, bounds.max_depth.get(), bounds.max_output.get(), indent.is_some(), width))
+    Ok(Encoder(out, stack, emit_top, 0, False, bounds.max_depth.get(), bounds.max_output.get(), indent.is_some(), width))
 
 # Delivers every pending byte to `writer` and keeps the buffer's capacity.
 # Does not flush. On failure only the bytes the writer did not accept stay
