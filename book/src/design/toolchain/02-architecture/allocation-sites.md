@@ -16,6 +16,24 @@ provenance in either kind of result. Paths below are relative to the repository
 root; native aggregate functions without a path are in
 `plenty-runtime/src/aggregates.rs`.
 
+## JSON tree output: encoder storage versus writer storage
+
+`std.json.write_value` borrows the tree and builds the complete representation
+before calling the writer. For `{"k":["a\nb"]}`, the encoder owns three
+ordinary byte buffers: the pending JSON bytes, a nesting stack, and a
+34-byte set identifying characters that need escaping. Keys and text are
+borrowed: unescaped runs and escape sequences go into the pending output,
+not a separate quoted string. Spare capacity in the writer cannot serve any
+of those encoder buffers. Allocations inside a writer are its own.
+
+If encoding fails, the writer has not been called. Once delivery starts,
+a writer error leaves accepted bytes in the destination. For example, accepting
+four of those 14 JSON bytes leaves `{"k"` after any existing header. The error
+offset is 14 (bytes encoded), not four (bytes accepted). The local encoder is
+dropped. To resume delivery, retain an `Encoder` and call `write_pending`;
+it keeps only the unaccepted suffix on error and does not flush the writer.
+This trace covers tree writing, not typed serialization hooks.
+
 ## Base64: packed result or text staging
 
 The eight `base64_*` and `base64url_*` [codec functions](../../stdlib/encoding.md#codecs)

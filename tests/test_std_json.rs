@@ -1098,6 +1098,52 @@ def main() -> Result[(), AllocError | IoError | std.encoding.EncodingError | std
     );
 }
 
+#[cfg(feature = "runtime-checks")]
+#[test]
+fn write_value_stages_before_calling_a_preallocated_writer() {
+    let source = format!(
+        r#"{HEADER}
+import std.alloc
+import std.math
+
+pub class PrefixSink:
+    pub data: Bytes
+    pub called: bool
+
+    pub def write(self: &mut PrefixSink, source: &[u8]) -> Result[i64, StreamError]:
+        if self.called:
+            return Err(StreamError.Io(IoError.NotWritable))
+        self.called = True
+        count = std.math.min(len(source), 4)
+        self.data.extend(&source[:count]).map_error(def(e: AllocError) -> StreamError: StreamError.OutOfRange)?
+        Ok(count)
+
+    pub def flush(self: &mut PrefixSink) -> Result[(), StreamError]:
+        Ok(())
+
+def main() -> Result[(), AllocError | IoError | std.bytes.BytesError | JsonError]:
+    bounds = std.json.limits()
+    value = std.json.parse_text("{{\"k\":[\"a\\nb\"]}}", &bounds)?
+    mut sink = PrefixSink(std.alloc.system().bytes_with_capacity(64)?, False)
+    sink.data.extend(b"H:")?
+    cap = sink.data.capacity()
+    print("__test_fail_allocations_after_0__")?
+    refused = std.json.write_value(&mut sink, &value, &bounds)
+    print("__test_restore_allocations__")?
+    print(settled(refused)?, sink.called, sink.data.to_text()?, sink.data.capacity() == cap)?
+    partial = std.json.write_value(&mut sink, &value, &bounds)
+    print(settled(partial)?, sink.data.to_text()?, sink.data.capacity() == cap)?
+    Ok(())
+"#
+    );
+    for optimize in [false, true] {
+        assert_eq!(
+            output_with_optimization(&source, optimize),
+            "Allocation(AllocError.OutOfMemory) 0 0 0 False H: True\nStream(Io(IoError.NotWritable)) 14 0 0 H:{\"k\" True"
+        );
+    }
+}
+
 #[test]
 fn the_encoder_writes_compact_text_with_minimal_escapes() {
     native(
