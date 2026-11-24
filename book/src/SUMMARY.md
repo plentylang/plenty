@@ -712,6 +712,7 @@
     - [Plenty toolchain manager](proposals/plenty-manager.md)
     - [Faster linking](proposals/faster-linking.md)
     - [C interop and dynamic libraries](proposals/ffi-and-dynamic-libraries.md)
+    - [Trusted inline assembly](proposals/inline-assembly.md)
     - [Stronger safety boundaries](proposals/trusted-safety-boundaries.md)
         - [Foreign ownership and explicit trust](proposals/trusted-safety-boundaries/native.md)
         - [Actor recovery and safety qualification](proposals/trusted-safety-boundaries/recovery.md)

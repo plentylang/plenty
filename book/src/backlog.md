@@ -357,6 +357,7 @@ The consistency milestones B88, B89, B91 and B93 are recorded in
 | ID | Remaining work | Scope / dependency |
 | --- | --- | --- |
 | B98 | Stronger native trust and recovery boundaries | Assess and prototype the [safety-boundary proposal](proposals/trusted-safety-boundaries.md): explicit trusted modules and unchecked exports; checked foreign owners and owner-bound borrows; actor abandonment certification and conservative native callback crossings; transitive trust reports/admission policy; uniform callback safety guarantees. Proposed, not implemented or scheduled. Prefer confinement and recovery certification as initial decisions; exact syntax and compatibility remain open. Related B17 package policy, B22 effects, and B85 actor isolation. |
+| B99 | Trusted inline assembly | Unscheduled [proposal](proposals/inline-assembly.md). Prototype fixed-register scalar operands on x86-64 only when a concrete use case needs placement inside the caller and a typed intrinsic is a poor fit. Compare with existing C ABI calls and qualify allocation, effect checking and emission before adoption. Related B98. |
 
 ### Units of measure
 
