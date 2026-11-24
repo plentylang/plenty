@@ -1,0 +1,41 @@
+def via_match(nums: &list[i64], k: i64) -> Result[bool, AllocError | OverflowError[i64]]:
+    mut last_seen: dict[i64, i64] = {}?
+    for i, value in enumerate(nums):
+        match last_seen.get(*value):
+            case Some(previous):
+                if i - previous <= k:
+                    return Ok(True)
+            case Nothing:
+                pass
+        last_seen.insert(*value, i)?
+    Ok(False)
+
+def via_map_or(nums: &list[i64], k: i64) -> Result[bool, AllocError | OverflowError[i64]]:
+    mut last_seen: dict[i64, i64] = {}?
+    for i, value in enumerate(nums):
+        nearby = last_seen.get(*value).map_or(
+            Result[bool, OverflowError[i64]].Ok(False),
+            def [i, k](previous: i64) -> Result[bool, OverflowError[i64]]:
+                Ok(i - previous <= k),
+        )?
+        if nearby:
+            return Ok(True)
+        last_seen.insert(*value, i)?
+    Ok(False)
+
+def main() -> Result[(), AllocError | OverflowError[i64] | IoError]:
+    mode = args()?
+    mut nums = list[i64].with_capacity(100000)?
+    for i in range(100000):
+        nums.append(i % 1024 if len(mode) > 2 else i)?
+    mut found = 0
+    if len(mode) > 1 and mode[1] == "match":
+        for _ in range(80):
+            if via_match(&nums, 16)?:
+                found += 1
+    else:
+        for _ in range(80):
+            if via_map_or(&nums, 16)?:
+                found += 1
+    print(found)?
+    Ok(())

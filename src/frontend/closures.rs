@@ -7,6 +7,87 @@ fn owned_capture(ty: &Ty, once: bool) -> bool {
     !ty.contains_reference() && (once || !ty.contains_generator_frame())
 }
 
+pub(super) fn scalar_capture(ty: &Ty) -> bool {
+    ty.is_numeric() || *ty == Ty::Bool
+}
+
+/// These bodies only read plain scalars, so their immutable captures can
+/// become ordinary value parameters. Keep capture references for everything
+/// else, including calls that might observe a capture's address.
+pub(super) fn scalar_capture_reads(function: &Function, payload: &Ty, output: &Ty) -> bool {
+    let [
+        Stmt {
+            kind: Statement::Expr(body),
+            ..
+        },
+    ] = function.body.as_slice()
+    else {
+        return false;
+    };
+    if !scalar_capture(payload) {
+        return false;
+    }
+    let name = |name: &str| {
+        function.captures.iter().any(|capture| capture.name == name)
+            || function.inputs.iter().any(|(input, _)| input == name)
+    };
+    let scalar_body = match output {
+        Ty::Enum(sum) if sum.is_option() || sum.is_result() => {
+            let tag = usize::from(sum.is_option());
+            let variant = if sum.is_option() { "Some" } else { "Ok" };
+            let Expression::Call(callee, args) = &ungroup(body).kind else {
+                return false;
+            };
+            let [value] = args.as_slice() else {
+                return false;
+            };
+            if callee != variant
+                || name(callee)
+                || !scalar_capture(&sum.get().variants[tag].fields[0])
+            {
+                return false;
+            }
+            value
+        }
+        ty if scalar_capture(ty) => body,
+        _ => return false,
+    };
+    scalar_reads(scalar_body, &name)
+}
+
+fn scalar_reads(expr: &Expr, name: &impl Fn(&str) -> bool) -> bool {
+    match &ungroup(expr).kind {
+        Expression::Number(_) | Expression::Bool(_) => true,
+        Expression::Name(value) => name(value),
+        Expression::Unary(operator, value) => {
+            matches!(operator.as_str(), "+" | "-" | "~" | "not") && scalar_reads(value, name)
+        }
+        Expression::Binary(operator, lhs, rhs) => {
+            matches!(
+                operator.as_str(),
+                "+" | "-"
+                    | "*"
+                    | "/"
+                    | "//"
+                    | "%"
+                    | "&"
+                    | "|"
+                    | "^"
+                    | "<<"
+                    | ">>"
+                    | "=="
+                    | "!="
+                    | "<"
+                    | ">"
+                    | "<="
+                    | ">="
+            ) && scalar_reads(lhs, name)
+                && scalar_reads(rhs, name)
+        }
+        _ => false,
+    }
+}
+
 impl Lower<'_> {
     pub(super) fn closure_value(
         &mut self,
@@ -14,6 +95,23 @@ impl Lower<'_> {
         at: &Token,
         ops: &mut Vec<Op>,
     ) -> Result<Ty> {
+        let (closure, loans) = self.closure_parts(function, at, ops)?;
+        self.closure_loans
+            .insert(closure.name.clone(), loans.clone());
+        ops.push(Op::ClosureNew(closure.clone()));
+        Self::end_reads(loans, ops);
+        Ok(Ty::Closure(closure))
+    }
+
+    /// Evaluate the captures and declare the original closure body. A sum
+    /// adapter with an immediately invoked scalar mapper can keep its
+    /// captures in separate locals instead of building an owner environment.
+    pub(super) fn closure_parts(
+        &mut self,
+        function: &Function,
+        at: &Token,
+        ops: &mut Vec<Op>,
+    ) -> Result<(Arc<ClosureType>, Vec<usize>)> {
         let mut function = function.clone();
         function.name = format!(
             "__plenty_closure_{}_{}_{}",
@@ -110,12 +208,7 @@ impl Lower<'_> {
                 .inherit_requirement(self.sigs, &self.function_name, &function.name);
             self.generics.declare(function.clone(), self.sigs);
         }
-        let closure = Arc::new(closure);
-        self.closure_loans
-            .insert(closure.name.clone(), loans.clone());
-        ops.push(Op::ClosureNew(closure.clone()));
-        Self::end_reads(loans, ops);
-        Ok(Ty::Closure(closure))
+        Ok((Arc::new(closure), loans))
     }
 
     pub(super) fn call_closure(

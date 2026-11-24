@@ -1471,6 +1471,21 @@ assignment, closure replacement, mutable and borrowed captures, and float edge
 cases. Whole-program instructions fall from 44,158,729 to 40,881,853 with the
 same checksum. This is an instruction-count result, not an elapsed-time claim.
 
+## Immediate sum mappers (issue #1019)
+
+An immediate `map_or` closure with immutable scalar captures can keep
+its snapshots in locals and pass them directly to the selected mapper.
+The receiver, eager default and captures retain their evaluation order.
+Match arms that produce an unmanaged sum can pass known success payloads
+through `?`, including a boolean used as a branch condition. Overflow still
+propagates through the original error path.
+
+The retained probes in `experiments/kernels/sum-closure/` isolate the
+callback and exercise it in a full dictionary scan. In the isolated x86-64
+kernel the chained function shrinks from 583 to 68 bytes and shares the
+explicit match's machine code. In full scans with unique and repeated keys,
+the chained version retires about as many instructions as the explicit match.
+
 ## Checker intervals (issue #952)
 
 The checker's [integer intervals](../design/language/03-types/intervals.md)

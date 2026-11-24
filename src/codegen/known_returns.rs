@@ -1,17 +1,18 @@
-//! A return of an inlined call whose `Result` or `Option` is known to hold
-//! the success variant skips the caller's `?` test (issue #936). See
+//! A `Result` or `Option` known to hold the success variant skips the `?`
+//! test after an inlined call or a value-producing match. See
 //! `book/src/design/toolchain/02-architecture/emission.md#known-returns`.
 //!
-//! An inlined callee's returns jump to one block that takes the returned
-//! value, and `?` there tests the value's tag. Cranelift threads no jumps, so
-//! a return that built `Ok(x)` still ran the test. Here `?` moves each such
+//! An inlined callee's returns or the arms of a value-producing match jump
+//! to a block that takes the sum, and `?` there tests its tag. A return that
+//! built `Ok(x)` would still run the test. Here `?` moves each such
 //! jump to its success block, passing the payload word.
 //!
 //! Moving a jump needs its old target unsealed: the frontend rejects removing
-//! a predecessor of a sealed block. The return block of an inlined call and
+//! a predecessor of a sealed block. Sum-valued matches, inlined returns and
 //! the exit of an inlined `checked` function body therefore stay unsealed
 //! until the next op that is not `?`. Sealing late changes no generated code.
 use super::*;
+use cranelift_codegen::cursor::{Cursor, FuncCursor};
 use cranelift_codegen::ir::{
     DataFlowGraph, Inst, InstructionData, Opcode, Value as NativeValue, ValueDef,
 };
@@ -27,6 +28,17 @@ pub(super) struct Joins {
 impl Joins {
     pub(super) fn pending(&self) -> bool {
         !self.unsealed.is_empty()
+    }
+
+    /// Leave an arm's joins available to the enclosing match without letting
+    /// unrelated operations in the next arm seal them. Keep the jump records
+    /// shared: multiple arms can jump to the same enclosing checked exit.
+    pub(super) fn suspend(&mut self, saved: &mut Vec<Block>) {
+        saved.append(&mut self.unsealed);
+    }
+
+    pub(super) fn resume(&mut self, saved: Vec<Block>) {
+        self.unsealed.extend(saved);
     }
 }
 
@@ -89,11 +101,11 @@ impl Lowerer<'_, '_> {
     }
 
     /// The success block of a `?` on `value`, when returns known to hold
-    /// `success_tag` now jump to it. It takes the payload's low word, which
-    /// is the whole payload of `ty`. The flag tells that every other arrival
-    /// is known to hold the failure variant, so the `?` needs no test: every
-    /// jump into these blocks is recorded, by `return_to` and by the two
-    /// exits of a `checked` body.
+    /// `success_tag` now jump to it. It takes the payload's low word, or an
+    /// i8 directly for bool so a following branch can reuse it. The flag is
+    /// set when every other arrival holds the failure variant. Each jump
+    /// into these blocks is recorded when lowering returns, matches and
+    /// checked exits.
     pub(super) fn bypass_try(
         &mut self,
         value: NativeValue,
@@ -105,13 +117,13 @@ impl Lowerer<'_, '_> {
             return None;
         }
         let storage = ty.native_storage().unwrap_or_else(|| ty.clone());
+        let boolean = storage == Ty::Bool;
         let one_word = !storage.wide()
             && !matches!(storage, Ty::Ref(..) | Ty::View(..))
             && clif_type(storage).bits() <= 64;
         let current = self.bcx.current_block()?;
         let mut arrivals = Arrivals::default();
-        // Nothing lowered since the call: the value is still only the
-        // block's parameter.
+        // Take the bypass only when it skips no instructions.
         if self.bcx.func.layout.first_inst(current).is_some() {
             return None;
         }
@@ -122,14 +134,23 @@ impl Lowerer<'_, '_> {
             return None;
         }
         let success = self.bcx.create_block();
-        self.bcx.append_block_param(success, types::I64);
+        self.bcx
+            .append_block_param(success, if boolean { types::I8 } else { types::I64 });
         for &(jump, target, low) in &arrivals.ready {
             self.bcx.change_jump_destination(jump, target, success);
+            let payload = if boolean {
+                FuncCursor::new(self.bcx.func)
+                    .at_inst(jump)
+                    .ins()
+                    .ireduce(types::I8, low)
+            } else {
+                low
+            };
             let dfg = &mut self.bcx.func.dfg;
             let InstructionData::Jump { destination, .. } = &mut dfg.insts[jump] else {
                 unreachable!("an arrival is a jump")
             };
-            destination.update_args(&mut dfg.value_lists, |_| BlockArg::Value(low));
+            destination.update_args(&mut dfg.value_lists, |_| BlockArg::Value(payload));
         }
         if !arrivals.unknown {
             for block in arrivals.forwarding {

@@ -67,6 +67,8 @@ The [Base64 boundary audit](completed-work/language-and-tooling.md#base64-alloca
 records the shared-cursor lowering and retained instruction evidence for issue #888.
 [Conditional callback captures](completed-work/performance.md#conditional-callback-captures-issue-891)
 records the removal of the remaining immutable fold-capture reloads.
+The [immediate sum mapper record](completed-work/performance.md#immediate-sum-mappers-issue-1019)
+covers the closure and checked-branch improvements for `map_or`.
 
 [Returned builtin views](completed-work/language-and-tooling.md#b11-borrowing)
 record the first-reference-origin return subset of issue #945, including
