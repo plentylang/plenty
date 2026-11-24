@@ -376,7 +376,6 @@ made per token and per event, not byte access.
   input and use one decoder per document.
 - The tree holds integers as `i64` and other numbers as `f64`. Larger integers
   and exact decimals are available only as `Event.Number` text.
-- `write_value` builds the whole encoding before writing. Use an `Encoder` with
-  `write_pending` for bounded output memory.
+- `write_value` builds the whole encoding before writing, even if the writer has spare capacity. Encoder failure leaves the writer untouched; a writer error can leave an accepted prefix. To bound pending output or retry delivery, keep an `Encoder` and call `write_pending` between events. See [encoder versus writer storage](../toolchain/02-architecture/allocation-sites.md#json-tree-output-encoder-storage-versus-writer-storage).
 - Typed codecs support built-ins and derived or handwritten hooks; see [typed JSON codecs](json-codecs.md) and [`@serial`](serial-derive.md).
 - No tree equality or path lookup helpers.

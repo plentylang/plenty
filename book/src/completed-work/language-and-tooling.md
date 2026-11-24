@@ -7,6 +7,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### JSON tree writer allocation audit
+
+[Traced encoder and writer storage](../design/toolchain/02-architecture/allocation-sites.md#json-tree-output-encoder-storage-versus-writer-storage). Native coverage separates allocation refusal before the first write from writer failure after an accepted prefix. No API or runtime change.
+
 ### Base64 destination decoding
 
 [`base64_decode_append`](../design/stdlib/encoding.md#codecs) decodes into ordinary or selected `Bytes` without a second owner. Malformed input leaves the destination unchanged without requesting growth.

@@ -3,6 +3,7 @@
 Delivery history and retired backlog entries live here, separate from the
 [backlog](backlog.md), which is the single maintained list of future work.
 
+- [JSON tree writer allocation audit](completed-work/language-and-tooling.md#json-tree-writer-allocation-audit).
 - [Base64 destination decoding](completed-work/language-and-tooling.md#base64-destination-decoding).
 - [Selected byte buffers in the standard library](completed-work/language-and-tooling.md#selected-byte-buffers-in-the-standard-library).
 - [Storage selection guide](completed-work/language-and-tooling.md#storage-selection-guide).
