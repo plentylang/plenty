@@ -6,7 +6,7 @@
 # 128-bit digit packing and exact Montgomery reduction:
 # https://flintlib.org/doc/algorithms/fft/multimodular.html
 # Malachite 0.14 informed grouped conversion, bit packing, radix-power squaring,
-# recursive quotient blocks and cached Barrett reciprocals with cyclic products.
+# fractional digit extraction, and Barrett division with reused reciprocals.
 # No third-party code or data is included.
 from std.bytes import to_text, BytesError
 from std.fmt import Formatter, FormatError
@@ -713,9 +713,9 @@ def render_chunks(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u
         mut size = len(scratch)
         mut end = len(output)
         while size > 1:
-            remainder = divide_render_chunk(&mut scratch[:size], chunk)
+            fraction = divide_render_chunk(&mut scratch[:size], chunk)
             end -= chunk.width
-            render_word(remainder, radix, &mut output[end:end + chunk.width])
+            render_fraction(fraction, radix, &mut output[end:end + chunk.width])
             if scratch[size - 1] == 0u64:
                 size -= 1
         render_word(scratch[0], radix, &mut output[:end])
@@ -735,7 +735,19 @@ def divide_render_chunk(words: &mut [u64], chunk: RadixChunk) -> u64:
             (quotient, rest) = estimate_division_word(hi, word << shift, chunk.divisor, chunk.inverse)
             words[i] = quotient
             remainder = rest
-        remainder >> shift
+        # Round upward in units of B^-1, with B = 2^64. One unit
+        # is smaller than 1/radix^width, so the fraction stays in
+        # the interval for the exact grouped remainder.
+        (fraction, _) = estimate_division_word(remainder, 0u64, chunk.divisor, chunk.inverse)
+        fraction + 1u64
+
+def render_fraction(fraction: u64, radix: u64, output: &mut [u8]) -> ():
+    alphabet = b"0123456789abcdefghijklmnopqrstuvwxyz"
+    mut remaining = fraction
+    for i in range(len(output)):
+        (next, digit) = remaining.widening_mul(radix)
+        output[i] = alphabet[i64(digit)]
+        remaining = next
 
 def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8], split: i64, reuse: bool, powers: &mut RadixPowers) -> Result[(), AllocError]:
     unchecked:
@@ -1649,13 +1661,17 @@ class WideDivisor:
     def prepare_division_reciprocal(self: &mut WideDivisor, dividend_limbs: i64) -> Result[(), AllocError]:
         unchecked:
             n = len(self.digits)
-            high = dividend_limbs - self.first - n
-            if n < DIVISION_RECIPROCAL_LIMBS or n >= MAX_TRANSFORM_WORDS or high < n:
+            quotient_limbs = dividend_limbs - self.first - n
+            if n < DIVISION_RECIPROCAL_LIMBS or n >= MAX_TRANSFORM_WORDS or quotient_limbs < n // 2:
                 return Ok(())
             cyclic = division_cyclic_width(n)
             if cyclic == 0:
                 return Ok(())
-            blocks = (high - 1) // (n - 1) + 1
+            # For narrower quotients, two equal blocks can share a shorter
+            # reciprocal. Handle an odd leading limb before the first block.
+            split = quotient_limbs < n
+            high = quotient_limbs - quotient_limbs % 2 if split else quotient_limbs
+            blocks = 2 if split else (high - 1) // (n - 1) + 1
             width = (high - 1) // blocks + 1
             # Equal full blocks can leave a short tail. Compute the
             # difference from width without multiplying width by blocks.
@@ -2069,6 +2085,10 @@ def divide_reciprocal_digits(u: &mut [u64], v: &[u64], q: &mut [u64], inverse: u
         width = len(reciprocal.digits)
         cyclic = reciprocal.cyclic_words
         mut high = len(q) - 1
+        # Include an extra leading limb in the initial small division
+        # when doing so leaves two full blocks of the same width.
+        if high == 2 * width + 1:
+            high -= 1
         if high < RECIPROCAL_TAIL_LIMBS or n + high <= cyclic:
             return divide_normalized(u, v, q, inverse, block_limbs)
         divide_wide_digits(&mut u[high:], v, &mut q[high:], inverse)
