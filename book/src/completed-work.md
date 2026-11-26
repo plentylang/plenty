@@ -41,6 +41,8 @@ Delivery history and retired backlog entries live here, separate from the
   of issue #844.
   [Scalar floating-load folding](completed-work/performance.md#scalar-floating-load-folding-issue-980)
   removes the standalone input load from spectral-norm's inner loops.
+  The [AVX scalar conversion experiment](completed-work/performance.md#avx-scalar-conversion-experiment-issue-1015)
+  measures reusing the invariant numerator register in those loops.
 
 The [iced counter experiment](completed-work/libraries.md#iced-counter-experiment)
 uses checked executable callbacks and a separately selected native archive.
