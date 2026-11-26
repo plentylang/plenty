@@ -9,7 +9,8 @@
 
 typedef __uint128_t u128;
 typedef __m256d Vec;
-enum { MAX_PRIMES = 6, MAX_WORDS = 6 };
+enum { MAX_PRIMES = 6, MAX_WORDS = 6, TRUNCATION_BLOCK = 256 };
+typedef enum { FLAT, BLOCKED, PACKED, TRUNCATED } Mode;
 
 typedef struct {
     uint64_t modulus;
@@ -34,6 +35,7 @@ typedef struct {
     double imag;
     double inv_length;
     double radix64;
+    double radix96;
 } Field;
 
 typedef struct {
@@ -108,11 +110,11 @@ static void *allocate(size_t count, size_t size) {
 
 static void fill_roots(double *table, size_t count, uint64_t root, const Field *f);
 
-static Plan make_plan(size_t a, size_t b) {
+static Plan make_plan(size_t a, size_t b, Mode mode) {
     Plan plan = {.profile = select_profile(a, b)};
     size_t n = plan.profile.n;
     plan.residues = allocate(plan.profile.count * n, sizeof(double));
-    plan.right = allocate(n, sizeof(double));
+    plan.right = allocate((mode >= PACKED ? plan.profile.count : 1) * n, sizeof(double));
     for (unsigned i = 0; i < plan.profile.count; i++) {
         uint64_t p = primes[i].modulus;
         uint64_t g = primes[i].witness;
@@ -128,6 +130,8 @@ static Plan make_plan(size_t a, size_t b) {
         f->imag = power(g, (p - 1) / 4, p);
         f->inv_length = power(n, p - 2, p);
         f->radix64 = (UINT64_MAX % p + 1) % p;
+        if (mode >= PACKED)
+            f->radix96 = power(2, 96, p);
         for (size_t h = 1; h < n; h *= 2) {
             uint64_t w = power(g, (p - 1) / (2 * h), p);
             uint64_t winv = power(w, p - 2, p);
@@ -337,6 +341,78 @@ static void blocked_transform(double *data, size_t n, const Field *f, bool inver
         fused_stage(data, h, f, true);
 }
 
+// Same decimation-in-frequency order as the blocked transform. Each cut
+// is on a vector boundary and complete subtrees use the radix-4 kernel.
+static void forward_prefix(double *data, size_t n, size_t inputs, size_t count,
+                           const Field *f) {
+    if (count == n) {
+        blocked_transform(data, n, f, false);
+        return;
+    }
+    size_t h = n / 2;
+    size_t present = inputs < h ? inputs : h;
+    size_t paired = inputs - present;
+    Vec p = _mm256_set1_pd(f->p), r = _mm256_set1_pd(f->reciprocal);
+    double *right = data + h;
+    const double *roots = f->forward + h - 1;
+    for (size_t i = 0; i < paired; i += 4) {
+        Vec a = _mm256_loadu_pd(data + i), b = _mm256_loadu_pd(right + i);
+        _mm256_storeu_pd(data + i, add(a, b, p));
+        if (count > h)
+            _mm256_storeu_pd(right + i, mul(sub(a, b, p), _mm256_loadu_pd(roots + i), p, r));
+    }
+    if (count <= h) {
+        forward_prefix(data, h, present, count, f);
+        return;
+    }
+    for (size_t i = paired; i < present; i += 4)
+        _mm256_storeu_pd(right + i, mul(_mm256_loadu_pd(data + i), _mm256_loadu_pd(roots + i), p, r));
+    blocked_transform(data, h, f, false);
+    forward_prefix(right, h, present, count - h, f);
+}
+
+// Beyond count are known time-domain coefficients scaled by n. The
+// initial tail is zero. Each recursion derives its own known tail.
+static void inverse_prefix(double *data, size_t n, size_t count, const Field *f) {
+    if (count == n) {
+        blocked_transform(data, n, f, true);
+        return;
+    }
+    size_t h = n / 2;
+    double *right = data + h;
+    Vec p = _mm256_set1_pd(f->p), r = _mm256_set1_pd(f->reciprocal);
+    if (count <= h) {
+        Vec half = _mm256_set1_pd((f->p + 1) / 2);
+        for (size_t i = count; i < h; i += 4) {
+            Vec sum = add(_mm256_loadu_pd(data + i), _mm256_loadu_pd(right + i), p);
+            _mm256_storeu_pd(data + i, mul(sum, half, p, r));
+        }
+        inverse_prefix(data, h, count, f);
+        for (size_t i = 0; i < count; i += 4) {
+            Vec a = _mm256_loadu_pd(data + i);
+            _mm256_storeu_pd(data + i, sub(add(a, a, p), _mm256_loadu_pd(right + i), p));
+        }
+        return;
+    }
+    size_t tail = count - h;
+    blocked_transform(data, h, f, true);
+    const double *roots = f->forward + h - 1;
+    for (size_t i = tail; i < h; i += 4) {
+        Vec a = _mm256_loadu_pd(data + i);
+        Vec diff = sub(a, _mm256_loadu_pd(right + i), p);
+        _mm256_storeu_pd(data + i, add(a, diff, p));
+        _mm256_storeu_pd(right + i, mul(diff, _mm256_loadu_pd(roots + i), p, r));
+    }
+    inverse_prefix(right, h, tail, f);
+    const double *inverse = f->inverse + h - 1;
+    for (size_t i = 0; i < tail; i += 4) {
+        Vec a = _mm256_loadu_pd(data + i);
+        Vec b = mul(_mm256_loadu_pd(right + i), _mm256_loadu_pd(inverse + i), p, r);
+        _mm256_storeu_pd(data + i, add(a, b, p));
+        _mm256_storeu_pd(right + i, sub(a, b, p));
+    }
+}
+
 static void flat_transform(double *data, size_t n, const Field *f, bool inverse) {
     for (size_t h = inverse ? 1 : n / 2; h && h < n; h = inverse ? 2 * h : h / 2) {
         for (size_t start = 0; start < n; start += 2 * h) {
@@ -385,6 +461,49 @@ static void pack(const uint64_t *words, size_t len, double *row, size_t count,
         row[i] = r;
     }
     memset(row + count, 0, (profile->n - count) * sizeof(*row));
+}
+
+static size_t round_up(size_t size, size_t block) {
+    return (size + block - 1) & ~(block - 1);
+}
+
+static void pack_rows(const uint64_t *words, size_t len, double *rows, size_t count,
+                      const Plan *plan) {
+    const Profile *profile = &plan->profile;
+    const unsigned bits = profile->bits;
+    const uint64_t low_mask = (UINT64_C(1) << 48) - 1;
+    const unsigned middle_bits = bits < 96 ? bits - 48 : 48;
+    const uint64_t middle_mask = (UINT64_C(1) << middle_bits) - 1;
+    Vec p[MAX_PRIMES], reciprocal[MAX_PRIMES], radix96[MAX_PRIMES];
+    for (unsigned j = 0; j < profile->count; j++) {
+        p[j] = _mm256_set1_pd(plan->fields[j].p);
+        reciprocal[j] = _mm256_set1_pd(plan->fields[j].reciprocal);
+        radix96[j] = _mm256_set1_pd(plan->fields[j].radix96);
+    }
+    // Extract each coefficient once. Chunks of at most 48 bits convert
+    // exactly and are smaller than every prime. Each vector holds four
+    // consecutive coefficients so it can be stored in the prime's row.
+    for (size_t i = 0; i < count; i += 4) {
+        double lows[4] = {0}, middles[4] = {0}, highs[4] = {0};
+        for (size_t j = 0; j < 4 && i + j < count; j++) {
+            size_t bit = (i + j) * bits;
+            lows[j] = shifted_word(words, len, bit) & low_mask;
+            middles[j] = shifted_word(words, len, bit + 48) & middle_mask;
+            if (bits > 96)
+                highs[j] = shifted_word(words, len, bit + 96) & ((UINT64_C(1) << (bits - 96)) - 1);
+        }
+        Vec low = _mm256_loadu_pd(lows), mid = _mm256_loadu_pd(middles), high = _mm256_loadu_pd(highs);
+        const Vec radix48 = _mm256_set1_pd(0x1p48);
+        for (unsigned j = 0; j < profile->count; j++) {
+            Vec digit = add(low, mul(mid, radix48, p[j], reciprocal[j]), p[j]);
+            if (bits > 96)
+                digit = add(digit, mul(high, radix96[j], p[j], reciprocal[j]), p[j]);
+            _mm256_storeu_pd(rows + j * profile->n + i, digit);
+        }
+    }
+    size_t padded = round_up(count, 4);
+    for (unsigned j = 0; j < profile->count; j++)
+        memset(rows + j * profile->n + padded, 0, (profile->n - padded) * sizeof(double));
 }
 
 static void recover(Plan *plan, uint64_t *out, size_t words) {
@@ -460,25 +579,44 @@ static void recover(Plan *plan, uint64_t *out, size_t words) {
 }
 
 static void product(Plan *plan, const uint64_t *a, size_t na, const uint64_t *b, size_t nb,
-                    uint64_t *output, bool blocked) {
+                    uint64_t *output, Mode mode) {
     const Profile *profile = &plan->profile;
     size_t n = profile->n;
+    size_t count = mode == TRUNCATED && n >= TRUNCATION_BLOCK
+                       ? round_up(profile->na + profile->nb - 1, TRUNCATION_BLOCK) : n;
     void (*transform)(double *, size_t, const Field *, bool) =
-        blocked ? blocked_transform : flat_transform;
+        mode == FLAT ? flat_transform : blocked_transform;
+    if (mode >= PACKED) {
+        pack_rows(a, na, plan->residues, profile->na, plan);
+        pack_rows(b, nb, plan->right, profile->nb, plan);
+    }
     for (unsigned i = 0; i < profile->count; i++) {
         const Field *f = &plan->fields[i];
-        double *left = plan->residues + i * n, *right = plan->right;
-        pack(a, na, left, profile->na, profile, f);
-        pack(b, nb, right, profile->nb, profile, f);
-        transform(left, n, f, false);
-        transform(right, n, f, false);
+        double *left = plan->residues + i * n;
+        double *right = plan->right + (mode >= PACKED ? i * n : 0);
+        if (mode < PACKED) {
+            pack(a, na, left, profile->na, profile, f);
+            pack(b, nb, right, profile->nb, profile, f);
+        }
+        if (count < n) {
+            forward_prefix(left, n, round_up(profile->na, 4), count, f);
+            forward_prefix(right, n, round_up(profile->nb, 4), count, f);
+        } else {
+            transform(left, n, f, false);
+            transform(right, n, f, false);
+        }
         Vec p = _mm256_set1_pd(f->p), r = _mm256_set1_pd(f->reciprocal);
         Vec normalization = _mm256_set1_pd(f->inv_length);
-        for (size_t j = 0; j < n; j += 4) {
+        for (size_t j = 0; j < count; j += 4) {
             Vec b = mul(_mm256_loadu_pd(right + j), normalization, p, r);
             _mm256_storeu_pd(left + j, mul(_mm256_loadu_pd(left + j), b, p, r));
         }
-        transform(left, n, f, true);
+        if (count < n) {
+            memset(left + count, 0, (n - count) * sizeof(double));
+            inverse_prefix(left, n, count, f);
+        } else {
+            transform(left, n, f, true);
+        }
     }
     recover(plan, output, na + nb);
 }
@@ -512,19 +650,22 @@ static uint64_t *read_numbers(const char *path, size_t *len) {
 
 int main(int argc, char **argv) {
     assert(argc == 5 || argc == 6);
-    bool blocked = !strcmp(argv[1], "blocked");
-    assert(blocked || !strcmp(argv[1], "flat"));
+    const char *modes[] = {"flat", "blocked", "packed", "truncated"};
+    Mode mode = FLAT;
+    while (mode <= TRUNCATED && strcmp(argv[1], modes[mode]))
+        mode++;
+    assert(mode <= TRUNCATED);
     size_t na, nb;
     uint64_t *a = read_numbers(argv[2], &na), *b = read_numbers(argv[3], &nb);
     unsigned repeats = strtoul(argv[4], NULL, 10);
     assert(repeats);
     uint64_t *output = allocate(na + nb, sizeof(uint64_t));
     uint64_t now = now_ns();
-    Plan plan = make_plan(na, nb);
+    Plan plan = make_plan(na, nb, mode);
     uint64_t setup = now_ns() - now;
     now = now_ns();
     for (unsigned j = 0; j < repeats; j++)
-        product(&plan, a, na, b, nb, output, blocked);
+        product(&plan, a, na, b, nb, output, mode);
     uint64_t elapsed = now_ns() - now;
     size_t significant = na + nb;
     while (significant && !output[significant - 1])

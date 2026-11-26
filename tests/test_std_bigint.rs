@@ -535,6 +535,22 @@ fn decimal_render_reuses_a_large_split_power_at_the_exact_cap() {
 }
 
 #[test]
+fn radix_render_reuses_quotient_storage_for_unequal_siblings() {
+    let body = r#"    prefix = "876543210".repeat(1000)?
+    gap = "0".repeat(3102)?
+    tail = "700006001".repeat(663)?
+    text = ((prefix + gap)? + tail)?
+    for radix in [9, 10, 36]?:
+        value = parse(text, radix, 18069)?
+        print(value.to_string(radix, 18069)? == text)?
+        print(value.to_string(radix, 18166)? == text)?
+"#;
+    let expected = "True\n".repeat(6);
+    assert_eq!(run(body, false), expected);
+    assert_eq!(run(body, true), expected);
+}
+
+#[test]
 fn large_products_and_division_cross_algorithm_boundaries() {
     let mut body = String::new();
     let mut expected = String::new();

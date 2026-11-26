@@ -148,15 +148,16 @@ whole zero low limbs.
 
 The renderer bounds the digit count from the bit length, compares against
 one exact radix power if those bounds straddle the cap, and writes ASCII
-digits into a shared buffer. At the leaves, short division by a
-one-word radix power extracts a grouped remainder. The renderer scales that
+digits into a shared buffer. A mutable copy of the magnitude holds remainders
+in place. Sibling splits reuse slices of one quotient workspace, sized
+from the digit widths. At the leaves, short division by a one-word
+radix power extracts a grouped remainder. The renderer scales that
 remainder to a fixed-point fraction and multiplies by the radix to extract
 the digits. Each render computes its chunk divisor's reciprocal once.
 Decimal chunks contain 19 digits. Bases 2, 4, 8, 16, and 32 extract bit groups
 directly. Single-word rendering uses scalar division without a power cache.
-Conversion scratch
-allocations are fallible. Large radix-power squares reuse a single forward
-transform. General multiplication uses the two-operand transform.
+Conversion scratch allocations are fallible. Large radix-power squares reuse
+a single forward transform. General multiplication uses the two-operand transform.
 The crossovers between implementations depend on operand size and shape.
 
 Text conversion has explicit digit caps. Formatting through `display[W](out:
@@ -199,6 +200,7 @@ numeric carry bit, not a mode selection.
   exact modular arithmetic for transform residues, roots and products.
 - [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
   bit-length sizing, direct bit packing and extraction, fractional digit
-  extraction, radix-power squaring, short-quotient division, and Barrett
+  extraction, recursive rendering scratch reuse, radix-power squaring,
+  short-quotient division, and Barrett
   division with Newton reciprocals, cyclic corrections and equal-width blocks.
   This is an independent Plenty implementation.
