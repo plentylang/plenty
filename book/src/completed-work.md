@@ -3,6 +3,7 @@
 Delivery history and retired backlog entries live here, separate from the
 [backlog](backlog.md), which is the single maintained list of future work.
 
+- [Buffered delimiter reads after refused growth](completed-work/language-and-tooling.md#buffered-delimiter-reads-after-refused-growth).
 - [Bounded reads into selected storage](completed-work/language-and-tooling.md#bounded-reads-into-selected-storage).
 - [Shared JSON escape set](completed-work/language-and-tooling.md#shared-json-escape-set).
 - [JSON tree writer allocation audit](completed-work/language-and-tooling.md#json-tree-writer-allocation-audit).

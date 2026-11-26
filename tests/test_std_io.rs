@@ -1001,9 +1001,7 @@ Result[i64, std.io.Partial].Ok(8) abcdefgh
     );
 }
 
-#[test]
-fn read_up_to_grows_selected_storage_before_reading() {
-    let provider = r#"import std.alloc as alloc
+const REFUSE_THIRD_REQUEST: &str = r#"import std.alloc as alloc
 
 pub class Counting:
     root: alloc.Allocator
@@ -1013,13 +1011,47 @@ pub class Counting:
         unchecked:
             self.calls += 1
         print("request", self.calls).unwrap()
-        if self.calls > 2:
+        if self.calls == 3:
             return Err(AllocError.OutOfMemory)
         self.root.block(request)
 
     pub def release(self: &mut Counting, block: alloc.ByteBlock) -> ():
         drop(block)
 "#;
+
+#[test]
+fn read_until_retries_a_refused_append_from_read_ahead() {
+    let body = program(
+        r#"
+root = alloc.system()
+owner = alloc.allocator(&root, Counting(root.share(), 0)).unwrap()
+mut line = owner.bytes_with_capacity(6)?
+line.extend(b"H:")?
+mut reader = std.io.buffered_reader(fake("abcde|xy", []?)?, 4)?
+failed = reader.read_until(124u8, &mut line, 8)
+print(str.repr(failed)?, line.to_text()?, reader.buffered(), reader.inner.calls, reader.inner.at)?
+count = reader.read_until(124u8, &mut line, 4)?
+print(count, line.to_text()?, reader.buffered(), reader.inner.calls)?
+mut tail = std.bytes.empty()?
+remaining = reader.read_until(124u8, &mut tail, 2)?
+print(remaining, tail.to_text()?, reader.buffered(), reader.inner.calls)?
+"#,
+    );
+    for optimize in [false, true] {
+        let options = plenty::CompileOptions {
+            optimize,
+            ..Default::default()
+        };
+        let source = format!("{REFUSE_THIRD_REQUEST}\n{body}");
+        assert_eq!(
+            run_with_options(&source, b"", &options).stdout,
+            "request 1\nrequest 2\nrequest 3\nResult[i64, std.io.StreamError].Err(std.io.StreamError.Allocation(AllocError.OutOfMemory)) H:abcd 4 2 8\nrequest 4\n2 H:abcde| 2 2\n2 xy 0 2"
+        );
+    }
+}
+
+#[test]
+fn read_up_to_grows_selected_storage_before_reading() {
     let body = program(
         r#"
 root = alloc.system()
@@ -1046,7 +1078,7 @@ for step in [0, -2]?:
             ..Default::default()
         };
         assert_eq!(
-            run_with_options(&format!("{provider}\n{body}"), b"", &options).stdout,
+            run_with_options(&format!("{REFUSE_THIRD_REQUEST}\n{body}"), b"", &options).stdout,
             "request 1\nrequest 2\nconstructed\nrequest 3\nResult[i64, std.io.Partial].Err(std.io.Partial(completed=3, cause=std.io.StreamError.Allocation(AllocError.OutOfMemory))) 1 3 H:abc\n3 2 6 H:abcdef\nResult[i64, std.io.Partial].Ok(0) 1 0 H: True\nResult[i64, std.io.Partial].Err(std.io.Partial(completed=0, cause=std.io.StreamError.Io(IoError.Other))) 1 0 H: True"
         );
     }

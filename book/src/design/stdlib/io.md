@@ -177,8 +177,12 @@ the capacity, made while the buffer is empty, goes straight to the inner
 stream. `read_until` returns the count appended: zero is end of input, and a
 count whose last byte is not the delimiter means the limit or end of input came
 first. It retries `Interrupted`. After an
-error, bytes already appended stay in `out` and bytes not yet appended stay in
-the buffer.
+error, bytes already appended stay in `out`. If destination growth is refused,
+the inner reader may already have read past the delimiter. Retry with the same
+`BufReader` and `out`: the refused bytes are still buffered, including any
+read-ahead after the delimiter. To preserve an overall byte limit, subtract
+the increase in `out.len()` from the original limit before retrying; the error
+itself carries no count.
 
 | `BufWriter[W]` | Result | Contract |
 |---|---|---|
