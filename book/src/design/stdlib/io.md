@@ -141,7 +141,10 @@ function whose error sum lists each of them.
 All four retry `Interrupted` and continue after short progress. They stop at
 the first other error and return the bytes moved so far. After a failed
 `read_exact`, `buffer[start:start + completed]` holds the bytes read. After a
-failed `read_up_to`, `out` has grown by exactly `completed` bytes.
+failed `read_up_to`, the length of `out` has grown by exactly `completed` bytes.
+If growth is refused, the reader is not called for that step. If growth succeeds
+but the reader reports EOF or an error, the unused length is trimmed, not the
+capacity. A selected buffer retains its allocator across both cases.
 
 `read_exact`, `write_all`, and `copy_all` do not allocate. `copy_all` needs a
 nonempty `scratch`, otherwise `CopyError.Read(0, OutOfRange)`; its length is the

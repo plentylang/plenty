@@ -120,11 +120,15 @@ struct Run {
 }
 
 fn run(source: &str, input: &[u8]) -> Run {
+    run_with_options(source, input, &Default::default())
+}
+
+fn run_with_options(source: &str, input: &[u8], options: &plenty::CompileOptions) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("main.plenty");
     let executable = dir.path().join("program");
     std::fs::write(&path, source).unwrap();
-    plenty::compile_file_to_executable(&path, &executable, None)
+    plenty::compile_file_to_executable_with_options(&path, &executable, None, options)
         .unwrap_or_else(|error| panic!("{source}\n{error}"));
     let mut child = Command::new(executable)
         .current_dir(dir.path())
@@ -995,6 +999,57 @@ Result[i64, std.io.StreamError].Err(std.io.StreamError.Allocation(AllocError.Out
 Result[i64, std.io.Partial].Ok(8) abcdefgh
 "#,
     );
+}
+
+#[test]
+fn read_up_to_grows_selected_storage_before_reading() {
+    let provider = r#"import std.alloc as alloc
+
+pub class Counting:
+    root: alloc.Allocator
+    calls: i64
+
+    pub def allocate(self: &mut Counting, request: &alloc.Layout) -> Result[alloc.ByteBlock, AllocError]:
+        unchecked:
+            self.calls += 1
+        print("request", self.calls).unwrap()
+        if self.calls > 2:
+            return Err(AllocError.OutOfMemory)
+        self.root.block(request)
+
+    pub def release(self: &mut Counting, block: alloc.ByteBlock) -> ():
+        drop(block)
+"#;
+    let body = program(
+        r#"
+root = alloc.system()
+owner = alloc.allocator(&root, Counting(root.share(), 0)).unwrap()
+mut out = owner.bytes_with_capacity(8194)?
+print("constructed")?
+out.extend(b"H:")?
+mut reader = fake("abcdef", [3]?)?
+result = std.io.read_up_to(&mut reader, &mut out, 16384)
+print(str.repr(result)?, reader.calls, reader.at, out.to_text()?)?
+rest = std.io.read_up_to(&mut reader, &mut out, 3)
+print(rest.unwrap(), reader.calls, reader.at, out.to_text()?)?
+for step in [0, -2]?:
+    mut sink = root.bytes_with_capacity(2)?
+    sink.extend(b"H:")?
+    mut stopped = fake("more", [step]?)?
+    outcome = std.io.read_up_to(&mut stopped, &mut sink, 32)
+    print(str.repr(outcome)?, stopped.calls, stopped.at, sink.to_text()?, sink.capacity() >= 34)?
+"#,
+    );
+    for optimize in [false, true] {
+        let options = plenty::CompileOptions {
+            optimize,
+            ..Default::default()
+        };
+        assert_eq!(
+            run_with_options(&format!("{provider}\n{body}"), b"", &options).stdout,
+            "request 1\nrequest 2\nconstructed\nrequest 3\nResult[i64, std.io.Partial].Err(std.io.Partial(completed=3, cause=std.io.StreamError.Allocation(AllocError.OutOfMemory))) 1 3 H:abc\n3 2 6 H:abcdef\nResult[i64, std.io.Partial].Ok(0) 1 0 H: True\nResult[i64, std.io.Partial].Err(std.io.Partial(completed=0, cause=std.io.StreamError.Io(IoError.Other))) 1 0 H: True"
+        );
+    }
 }
 
 #[test]

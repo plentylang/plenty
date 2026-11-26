@@ -7,6 +7,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Bounded reads into selected storage
+
+Native tests for `read_up_to` distinguish refused growth after a short read from successful growth followed by EOF or a reader error. No API change.
+
 ### Shared JSON escape set
 
 The encoder scans a static byte literal rather than constructing an owned escape set for each document. Pending output and nesting state still use ordinary buffers.

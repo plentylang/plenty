@@ -16,6 +16,15 @@ provenance in either kind of result. Paths below are relative to the repository
 root; native aggregate functions without a path are in
 `plenty-runtime/src/aggregates.rs`.
 
+## Bounded reads into existing storage
+
+[`std.io.read_up_to`](../../stdlib/io.md) resizes the destination before each
+reader call. Spare capacity covers the offered range without growth; otherwise
+the destination's allocator pays. Refusal preserves earlier progress without
+consuming input for the refused step. EOF or a reader error trims the unused
+range but keeps any newly acquired capacity. The reader's own allocations
+are independent.
+
 ## JSON tree output: encoder storage versus writer storage
 
 `std.json.write_value` borrows the tree and builds the complete representation
