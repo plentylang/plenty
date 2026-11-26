@@ -117,7 +117,9 @@ when the quotient blocks allow a short cyclic correction product.
 The blocks reuse the transformed divisor and the transform roots. Full
 blocks can likewise reuse the transformed reciprocal for their quotient
 estimates. Preparing both operands costs scratch space proportional to the
-divisor width, even when the quotient is several times wider.
+divisor width, even when the quotient is several times wider. When the
+quotient is narrower than the divisor and the cyclic correction fits, two
+equal-width blocks can reuse a reciprocal sized to about half the quotient.
 For divisors near and just above a power-of-two limb width, the correction
 uses a cyclic transform at that width and a short product for the lowest
 limbs. Together those residues determine the full correction. Newton
@@ -147,10 +149,12 @@ whole zero low limbs.
 The renderer bounds the digit count from the bit length, compares against
 one exact radix power if those bounds straddle the cap, and writes ASCII
 digits into a shared buffer. At the leaves, short division by a
-one-word radix power extracts several characters at a time. Each render
-computes its chunk divisor's reciprocal once. Decimal chunks contain 19
-digits. Bases 2, 4, 8, 16, and 32 extract bit groups directly. Single-word
-rendering uses scalar division without a power cache. Conversion scratch
+one-word radix power extracts a grouped remainder. The renderer scales that
+remainder to a fixed-point fraction and multiplies by the radix to extract
+the digits. Each render computes its chunk divisor's reciprocal once.
+Decimal chunks contain 19 digits. Bases 2, 4, 8, 16, and 32 extract bit groups
+directly. Single-word rendering uses scalar division without a power cache.
+Conversion scratch
 allocations are fallible. Large radix-power squares reuse a single forward
 transform. General multiplication uses the two-operand transform.
 The crossovers between implementations depend on operand size and shape.
@@ -194,7 +198,7 @@ numeric carry bit, not a mode selection.
 - Peter L. Montgomery, [Modular multiplication without trial division](https://doi.org/10.1090/S0025-5718-1985-0777282-X):
   exact modular arithmetic for transform residues, roots and products.
 - [Malachite 0.14.0](https://docs.rs/crate/malachite-nz/0.14.0) informed
-  bit-length sizing, direct bit packing and extraction, grouped digit
-  conversion, radix-power squaring, recursive quotient blocks, short-quotient
-  division, and Newton reciprocals with cyclic Barrett correction products.
+  bit-length sizing, direct bit packing and extraction, fractional digit
+  extraction, radix-power squaring, short-quotient division, and Barrett
+  division with Newton reciprocals, cyclic corrections and equal-width blocks.
   This is an independent Plenty implementation.

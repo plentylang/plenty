@@ -230,6 +230,20 @@ The measurements and packing and vector transform experiments are in
 `experiments/bigint-comparison/barrett-plans/`. Issue #987 tracks the
 remaining latency gap, including conversion and multiplication.
 
+### Bigint near-balanced division and fractional digit extraction (issue #987)
+
+Large division can use two equal Barrett blocks for a quotient narrower than
+the significant divisor when a cyclic correction fits. The two blocks share a
+shorter reciprocal and its prepared transform. A short initial division handles
+an odd leading quotient limb. Non-power-of-two radix rendering extracts each
+group of digits from a fixed-point fraction using multiplication by the radix.
+
+Regressions cover signed quotient and remainder, odd and even quotient widths,
+low zero limbs in the divisor, grouped decimal digit boundaries and exact
+digit caps. `experiments/bigint-comparison/radix-vector/` records elapsed times
+and a standalone cache-blocked AVX2/FMA multiplication experiment. Issue #987
+tracks the remaining latency gap and production transform improvements.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

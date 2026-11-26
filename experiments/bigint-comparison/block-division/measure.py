@@ -22,6 +22,11 @@ def workloads(bits, rng, shape_sweep):
     ]:
         yield case, "parse", a, b, radix
     if shape_sweep:
+        if bits > 64:
+            yield "quotient-one-limb-shorter", "div", b * (q >> 64) + 42, b, 10
+        yield "quotient-three-quarters", "div", b * (q >> (bits - (3 * bits) // 4)) + 42, b, 10
+        if 2 * bits + 64 <= 4_000_000:
+            yield "quotient-one-limb-wider", "div", b * ((q << 64) | 73) + 42, b, 10
         for denominator in (2, 3, 8, 16):
             q_short = q >> (bits - bits // denominator)
             yield f"quotient-1-{denominator}", "div", b * q_short + 42, b, 10

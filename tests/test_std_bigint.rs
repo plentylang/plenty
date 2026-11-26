@@ -1,4 +1,5 @@
 //! BigInt is implemented in Plenty; fixed-width Rust arithmetic is an independent oracle.
+use std::fmt::Write;
 use std::process::Command;
 
 fn run(body: &str, optimize: bool) -> String {
@@ -278,6 +279,27 @@ def main() -> Result[(), BigIntError | IoError]:
             count += 1;
         }
     }
+    // Each field is a 19-digit remainder of division by 10^19.
+    // Exercise both sides of digit boundaries and leading zeroes in a group.
+    let groups = [
+        0u64,
+        1,
+        9,
+        10,
+        999_999_999_999_999_999,
+        1_000_000_000_000_000_000,
+        9_999_999_999_999_999_999,
+    ];
+    let mut text = String::from("-1");
+    for group in groups {
+        write!(text, "{group:019}").unwrap();
+    }
+    let width = text.len() - 1;
+    source.push_str(&format!(
+        "    check(\"{text}\", 10, {width}, {})?\n",
+        width - 1,
+    ));
+    count += 1;
     source.push_str("    Ok(())\n");
     let expected = "True True\n".repeat(count);
     assert_eq!(run_program(&source, false), expected);
@@ -448,6 +470,28 @@ fn barrett_cyclic_correction_recovers_limbs_above_the_transform() {
             print(previous == (base - from_i64(3))?, near == (divisor - one)?)?
 "#;
     let expected = "True True\n".repeat(18);
+    assert_eq!(run(body, false), expected);
+    assert_eq!(run(body, true), expected);
+}
+
+#[test]
+fn barrett_uses_equal_blocks_for_a_quotient_narrower_than_the_divisor() {
+    let body = r#"    one = from_i64(1)
+    # The numerator has 8190 or 8191 more limbs than the divisor. In the
+    # odd case a short initial division leaves two equal reciprocal blocks.
+    unshifted = (((one << 524277)? + (one << 200000)?)? + from_i64(3))?
+    for shift in [0, 68]?:
+        divisor = (unshifted << shift)?
+        for top in [524159, 524223]?:
+            quotient = (((one << top)? + (one << 65)?)? - from_i64(2))?
+            high = ((divisor << top)? + (divisor << 65)?)?
+            exact = (high - (divisor << 1)?)?
+            (q, r) = (exact - one)?.checked_divmod(&divisor)?
+            print(q == (quotient - one)?, r == (divisor - one)?)?
+            (floor, modulus) = (one - exact)?.checked_divmod(&divisor)?
+            print(floor == (-quotient)?, modulus == one)?
+"#;
+    let expected = "True True\n".repeat(8);
     assert_eq!(run(body, false), expected);
     assert_eq!(run(body, true), expected);
 }
