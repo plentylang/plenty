@@ -1832,6 +1832,26 @@ floating exception flags, protected span boundaries and over-limit early
 returns. The Cranelift allocator integration run retains 15 assembly-output
 mismatches with identical diagnostics at the two pins.
 
+## AVX scalar conversion experiment (issue #1015)
+
+The local Cranelift candidate reuses the constant numerator's register for the
+upper-lane input to an AVX signed integer-to-`f64` conversion. It requires an
+adjacent scalar division as the conversion's sole use. The division reads
+the converted low lane and takes its upper lane from the numerator. The
+spectral-norm loops keep the numerator in a register. In a separate probe an
+indirect call caused a spill, making the conversion depend on the reload.
+
+Both bounded spectral-norm matrix loops go from 13 to 12 instructions per
+pass on `x86-64-v3`, matching the isolated GCC kernels. Division, multiplication
+and addition keep their order, and the input load remains folded into the
+multiply. The candidate adds no spills in either matrix loop. A native
+comparison passed 2,048 bit-exact guarded-span cases across four rounding
+modes, including floating exception flags and over-limit early returns.
+
+The patch, measurements and test commands are in
+`experiments/kernels/avx-conversion/`. The candidate is local and the
+production compiler still selects the published fork revision.
+
 ## Declared-vector prototype (issue #967)
 
 The bounded experiment in `experiments/declared-vectors/` compares matched
