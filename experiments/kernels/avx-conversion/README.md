@@ -6,16 +6,18 @@ register immediately before each `vcvtsi2sd` to provide its upper lane
 without introducing a dependency on an earlier conversion.
 
 The [local backend patch](backend.patch) applies to fork revision
-`2986d9c5835ba6d03878312f8ef49703130bc65f`. It is also preserved as local
-commit `8471e3a4e88ab037173384b35c013b4bf2a8a627`. It covers optimized
-AVX signed `i32` or `i64` to `f64` conversion followed immediately by a
-division that uses the conversion only as its denominator. The numerator must
-be a scalar constant or a lane of a vector constant, defined in a different
-block that dominates the division. Reusing that register keeps the conversion
-independent of the previous iteration and avoids extending a new register's
-lifetime around the loop. The division reads only the conversion's low lane
-and copies its own upper lane from the numerator. SSE2, unoptimized code,
-and conversions outside this pattern keep their original lowering.
+`2986d9c5835ba6d03878312f8ef49703130bc65f`. The local fork commits are
+`8471e3a4e88ab037173384b35c013b4bf2a8a627` for the lowering and
+`8a6a6cbbf383ee1999202e16264ddf8b4568d903` for the regression update.
+The lowering covers optimized AVX signed `i32` or `i64` to `f64` conversion
+followed immediately by a division that uses the conversion only as its
+denominator. The numerator must be a scalar constant or a lane of a vector
+constant, defined in a different block that dominates the division. When
+the numerator stays in a register across the loop, reuse avoids creating a
+loop-carried dependency or keeping an extra register live. The division reads
+only the conversion's low lane and copies its own upper lane from the numerator.
+SSE2, unoptimized code, and conversions outside this pattern keep their
+original lowering.
 
 | A / AT inner pass on x86-64-v3 | Instructions |
 |---|---:|
@@ -37,6 +39,12 @@ backedge target and supplied a separate zero register. The other reused the
 numerator and kept the original loop start address. Each control reduced
 elapsed time by about 5% at `n = 5500` on a Ryzen 7 7840HS, motivating the
 compiler candidate.
+
+In a separate loop with an indirect call, Plenty's pinned allocator spilled
+the numerator. Reuse then put the reload on the path to the conversion
+and division. The probe retired one fewer instruction per pass with
+essentially unchanged median cycles on the 7840HS. Profitability with
+spilled numerators remains unmeasured outside that probe.
 
 ## Measurements
 
@@ -82,9 +90,12 @@ sources at optimized `x86-64-v3` differed.
 
 The native verifier passed 2,048 bit-exact matrix cases with protected span
 boundaries, over-limit early returns, and matching floating exception flags
-across all four rounding modes. The Cranelift regression checks the emitted
-instructions and runs positive reuse with a nonzero upper lane, shared
-conversion, and loop-carried numerator cases.
+across all four rounding modes. The Cranelift regression checks emitted
+instructions and execution with a nonzero upper lane and a loop-carried
+numerator. In the shared-denominator case, the numerator remains hoisted and
+exactly one conversion serves both consumers. A scratch build that allowed
+multiple uses emitted two conversions and failed the revised check. The
+original filetest passed with that scratch build.
 
 All 212 Cranelift x64 filetests passed with registry regalloc2 0.15.2.
 With Plenty's pinned allocator, the new test passed and 15 assembly

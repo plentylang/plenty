@@ -1837,8 +1837,9 @@ mismatches with identical diagnostics at the two pins.
 The local Cranelift candidate reuses the constant numerator's register for the
 upper-lane input to an AVX signed integer-to-`f64` conversion. It requires an
 adjacent scalar division as the conversion's sole use. The division reads
-the converted low lane and takes its upper lane from the numerator, which
-already occupies a register across the loop.
+the converted low lane and takes its upper lane from the numerator. The
+spectral-norm loops keep the numerator in a register. In a separate probe an
+indirect call caused a spill, making the conversion depend on the reload.
 
 Both bounded spectral-norm matrix loops go from 13 to 12 instructions per
 pass on `x86-64-v3`, matching the isolated GCC kernels. Division, multiplication

@@ -72,10 +72,10 @@ index ac9d7c5048..6ddfdfa7b7 100644
 +
 diff --git a/cranelift/filetests/filetests/isa/x64/fcvt-fdiv-avx.clif b/cranelift/filetests/filetests/isa/x64/fcvt-fdiv-avx.clif
 new file mode 100644
-index 0000000000..60cafe8c61
+index 0000000000..4400c7c218
 --- /dev/null
 +++ b/cranelift/filetests/filetests/isa/x64/fcvt-fdiv-avx.clif
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,89 @@
 +test compile
 +test run
 +set opt_level=speed
@@ -111,22 +111,37 @@ index 0000000000..60cafe8c61
 +; run: %loop_constant(2, 0x1.0) == 0x1.4p1
 +; run: %loop_constant(0, -0x0.0) == -0x0.0
 +
-+;; A second use still needs the separately lowered scalar conversion.
-+function %shared_denominator(i64) -> f64, f64 {
-+block0(v0: i64):
-+    v1 = f64const 0x1.0
-+    jump block1(v0)
++;; Keep the same hoisted vector constant and loop as in %loop_constant.
++;; The second use must share the conversion with the division.
++function %shared_denominator(i64, f64) -> f64 {
++block0(v0: i64, v1: f64):
++    v2 = vconst.f64x2 [0x1.0 0x2.0]
++    v3 = extractlane v2, 0
++    v4 = iconst.i64 0
++    v5 = iconst.i64 1
++    v14 = icmp sgt v0, v4
++    brif v14, block1(v0, v1), block2(v1)
 +
-+block1(v2: i64):
-+    v3 = fcvt_from_sint.f64 v2
-+    v4 = fdiv v1, v3
-+    return v4, v3
++block1(v6: i64, v7: f64):
++    v8 = fcvt_from_sint.f64 v6
++    v9 = fdiv v3, v8
++    v15 = fadd v7, v8
++    v10 = fadd v9, v15
++    v11 = isub v6, v5
++    v12 = icmp sgt v11, v4
++    brif v12, block1(v11, v10), block2(v10)
++
++block2(v13: f64):
++    return v13
 +}
 +
++; not: vcvtsi2sdq
 +; check: vxorpd
 +; check: vcvtsi2sdq
++; not: vcvtsi2sdq
 +; check: vdivsd
-+; run: %shared_denominator(-2) == [-0x1.0p-1, -0x1.0p1]
++; not: vcvtsi2sdq
++; run: %shared_denominator(2, 0x1.0) == 0x1.6p2
 +
 +;; A loop-carried numerator would serialize the conversion with the recurrence.
 +function %loop_carried_numerator(i32, f64) -> f64 {
