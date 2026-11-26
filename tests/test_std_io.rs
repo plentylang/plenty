@@ -1001,25 +1001,39 @@ Result[i64, std.io.Partial].Ok(8) abcdefgh
     );
 }
 
-#[cfg(feature = "runtime-checks")]
 #[test]
 fn read_up_to_grows_selected_storage_before_reading() {
+    let provider = r#"import std.alloc as alloc
+
+pub class Counting:
+    root: alloc.Allocator
+    calls: i64
+
+    pub def allocate(self: &mut Counting, request: &alloc.Layout) -> Result[alloc.ByteBlock, AllocError]:
+        unchecked:
+            self.calls += 1
+        print("request", self.calls).unwrap()
+        if self.calls > 2:
+            return Err(AllocError.OutOfMemory)
+        self.root.block(request)
+
+    pub def release(self: &mut Counting, block: alloc.ByteBlock) -> ():
+        drop(block)
+"#;
     let body = program(
         r#"
-owner = std.alloc.system()
+root = alloc.system()
+owner = alloc.allocator(&root, Counting(root.share(), 0)).unwrap()
 mut out = owner.bytes_with_capacity(8194)?
+print("constructed")?
 out.extend(b"H:")?
 mut reader = fake("abcdef", [3]?)?
-print("__test_fail_allocations_after_0__")?
 result = std.io.read_up_to(&mut reader, &mut out, 16384)
-print("__test_restore_allocations__")?
 print(str.repr(result)?, reader.calls, reader.at, out.to_text()?)?
-print("__test_fail_allocations_after_0__")?
 rest = std.io.read_up_to(&mut reader, &mut out, 3)
-print("__test_restore_allocations__")?
 print(rest.unwrap(), reader.calls, reader.at, out.to_text()?)?
 for step in [0, -2]?:
-    mut sink = owner.bytes_with_capacity(2)?
+    mut sink = root.bytes_with_capacity(2)?
     sink.extend(b"H:")?
     mut stopped = fake("more", [step]?)?
     outcome = std.io.read_up_to(&mut stopped, &mut sink, 32)
@@ -1029,12 +1043,11 @@ for step in [0, -2]?:
     for optimize in [false, true] {
         let options = plenty::CompileOptions {
             optimize,
-            test_hooks: true,
             ..Default::default()
         };
         assert_eq!(
-            run_with_options(&format!("import std.alloc\n{body}"), b"", &options).stdout,
-            "Result[i64, std.io.Partial].Err(std.io.Partial(completed=3, cause=std.io.StreamError.Allocation(AllocError.OutOfMemory))) 1 3 H:abc\n3 2 6 H:abcdef\nResult[i64, std.io.Partial].Ok(0) 1 0 H: True\nResult[i64, std.io.Partial].Err(std.io.Partial(completed=0, cause=std.io.StreamError.Io(IoError.Other))) 1 0 H: True"
+            run_with_options(&format!("{provider}\n{body}"), b"", &options).stdout,
+            "request 1\nrequest 2\nconstructed\nrequest 3\nResult[i64, std.io.Partial].Err(std.io.Partial(completed=3, cause=std.io.StreamError.Allocation(AllocError.OutOfMemory))) 1 3 H:abc\n3 2 6 H:abcdef\nResult[i64, std.io.Partial].Ok(0) 1 0 H: True\nResult[i64, std.io.Partial].Err(std.io.Partial(completed=0, cause=std.io.StreamError.Io(IoError.Other))) 1 0 H: True"
         );
     }
 }
