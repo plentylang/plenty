@@ -7,6 +7,10 @@ own current contracts; extensions of a mixed B item stay in the backlog.
 
 ## B13 — explicit allocator experiments
 
+### Buffered delimiter reads after refused growth
+
+A counting-provider test verifies that retrying `read_until` on the same reader appends the refused segment once and preserves read-ahead for the following record.
+
 ### Bounded reads into selected storage
 
 Native tests for `read_up_to` distinguish refused growth after a short read from successful growth followed by EOF or a reader error. No API change.

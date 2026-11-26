@@ -25,6 +25,11 @@ consuming input for the refused step. EOF or a reader error trims the unused
 range but keeps any newly acquired capacity. The reader's own allocations
 are independent.
 
+Unlike `read_up_to`, `BufReader.read_until` fills its own buffer before trying
+to append to the destination. Only a successful append advances the buffered
+cursor. A retry can therefore finish the record without reading the inner stream
+again, even if that stream has already advanced past the delimiter.
+
 ## JSON tree output: encoder storage versus writer storage
 
 `std.json.write_value` borrows the tree and builds the complete representation
