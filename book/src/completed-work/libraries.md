@@ -244,6 +244,20 @@ digit caps. `experiments/bigint-comparison/radix-vector/` records elapsed times
 and a standalone cache-blocked AVX2/FMA multiplication experiment. Issue #987
 tracks the remaining latency gap and production transform improvements.
 
+### Bigint rendering workspace and vector packing (issue #987)
+
+Non-power-of-two rendering keeps each split's remainder in the mutable
+magnitude and reuses one quotient workspace across sibling splits.
+Tests cover exact caps, unequal sibling magnitudes and low zero limbs.
+
+The standalone AVX2/FMA prototype shares coefficient extraction across
+prime rows and truncates the forward and inverse transforms in blocks of
+256 points. It matched 416 exact Python products under address and
+undefined-behavior sanitizers. Timings and the portable cofactor CRT
+comparison are recorded in `experiments/bigint-comparison/radix-vector/`.
+Issue #987 remains open for production multiplication and the remaining
+rendering and division latency gap.
+
 ### Release note: ordinary-path directory creation
 
 `std.fs.create_dirs(&path, unix_mode=0o700u32)` is a new operation for ordinary

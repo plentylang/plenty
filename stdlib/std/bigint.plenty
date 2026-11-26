@@ -382,12 +382,12 @@ class RadixPowers:
             self.compute(exponent)?
         Ok(self.exact.get_ref(exponent).unwrap())
 
-    def divide(self: &mut RadixPowers, value: &BigInt, exponent: i64, reuse: bool) -> Result[(list[u64], list[u64]), AllocError]:
+    def render_divisor(self: &mut RadixPowers, size: i64, exponent: i64, reuse: bool) -> Result[Option[&WideDivisor], AllocError]:
         if exponent not in self.exact:
             self.compute(exponent)?
         power = self.exact.get_ref(exponent).unwrap()
-        if power.word_len() < WIDE_DIVISION_LIMBS or magnitude_cmp(value, power) < 0:
-            return divide_narrow(value, power)
+        if size < power.word_len():
+            return Ok(Nothing)
         if self.prepared.is_none():
             self.prepared = Some(dict[i64, WideDivisor]()?)
         match &mut self.prepared:
@@ -396,8 +396,8 @@ class RadixPowers:
                     divisors.insert(exponent, prepare_wide_divisor(power)?)?
                 divisor = divisors.get_mut(exponent).unwrap()
                 if reuse:
-                    divisor.prepare_radix_reciprocal(value.word_len())?
-                divide_wide(value, divisor, RADIX_DIVISION_BLOCK_LIMBS)
+                    divisor.prepare_radix_reciprocal(size)?
+                Ok(Some(&divisor))
             case Nothing:
                 __trap("std.bigint: missing prepared divisor cache")
 
@@ -660,7 +660,7 @@ def render_large(value: &BigInt, radix: i64, limit: i64) -> Result[str, BigIntEr
         # Reserve a byte for an optional minus sign immediately before the
         # first significant digit, including when there is no leading padding.
         mut digits = [0u8 for _ in range(width + 1)].map_error(BigIntError.Allocation)?
-        render_digits(value, u64(radix), chunk, &mut digits[1:], width // 2, False, &mut powers).map_error(BigIntError.Allocation)?
+        render_magnitude(value, u64(radix), chunk, &mut digits[1:], &mut powers).map_error(BigIntError.Allocation)?
         # The magnitude is nonzero, so a significant digit ends this scan.
         mut first = 1
         while digits[first] == 48u8:
@@ -707,9 +707,8 @@ def render_word(value: u64, radix: u64, output: &mut [u8]) -> ():
             n = q
 
 
-def render_chunks(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8]) -> Result[(), AllocError]:
+def render_chunks(scratch: &mut [u64], radix: u64, chunk: RadixChunk, output: &mut [u8]) -> ():
     unchecked:
-        mut scratch = words(value)?
         mut size = len(scratch)
         mut end = len(output)
         while size > 1:
@@ -719,7 +718,6 @@ def render_chunks(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u
             if scratch[size - 1] == 0u64:
                 size -= 1
         render_word(scratch[0], radix, &mut output[:end])
-        Ok(())
 
 def divide_render_chunk(words: &mut [u64], chunk: RadixChunk) -> u64:
     unchecked:
@@ -749,21 +747,92 @@ def render_fraction(fraction: u64, radix: u64, output: &mut [u8]) -> ():
         output[i] = alphabet[i64(digit)]
         remaining = next
 
-def render_digits(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8], split: i64, reuse: bool, powers: &mut RadixPowers) -> Result[(), AllocError]:
+def render_magnitude(value: &BigInt, radix: u64, chunk: RadixChunk, output: &mut [u8], powers: &mut RadixPowers) -> Result[(), AllocError]:
     unchecked:
-        if value.word_len() <= 1:
-            render_word(value.word(0), radix, output)
+        size = value.word_len()
+        mut magnitude = zeros(size + 1)?
+        for i in range(size):
+            magnitude[i] = value.word(i)
+        if size <= 96:
+            render_chunks(&mut magnitude[:size], radix, chunk, output)
             return Ok(())
-        if value.word_len() <= 96:
-            return render_chunks(value, radix, chunk, output)
-        # Use the same right-hand width at each depth so sibling splits
-        # share one power and reciprocal even when the widths are odd.
+        width = len(output)
+        mut scratch = zeros(render_scratch_size(width, chunk)?)?
+        render_digits(&mut magnitude, size, radix, chunk, output, width // 2, False, powers, &mut scratch)
+
+# The largest child at each depth is the leftmost quotient. Bound its
+# limbs from its digit width using radix^chunk.width < 2^(log_floor + 1).
+# Sum the bounds along that path because ancestors retain their buffers.
+def render_scratch_size(width: i64, chunk: RadixChunk) -> Result[i64, AllocError]:
+    unchecked:
+        digits_per_group = chunk.width * 64
+        log_ceil = chunk.log_floor + 1
+        mut digits = width
+        mut split = width // 2
+        mut size = 0
+        while split > 0:
+            digits -= split
+            words = (digits // digits_per_group) * log_ceil
+            tail = ((digits % digits_per_group) * log_ceil + digits_per_group - 1) // digits_per_group
+            # An exact quotient can have one fewer limb than the division
+            # writes. Reserve another limb for normalizing that quotient.
+            room = words + tail + 2
+            if room > i64.MAX - size:
+                return Err(AllocError.CapacityOverflow)
+            size += room
+            split //= 2
+        Ok(size)
+
+def render_digits(value: &mut [u64], size: i64, radix: u64, chunk: RadixChunk, output: &mut [u8], split: i64, reuse: bool, powers: &mut RadixPowers, scratch: &mut [u64]) -> Result[(), AllocError]:
+    unchecked:
+        mut used = size
+        while used > 0 and value[used - 1] == 0u64:
+            used -= 1
+        if used <= 1:
+            render_word(0u64 if used == 0 else value[0], radix, output)
+            return Ok(())
+        if used <= 96:
+            render_chunks(&mut value[:used], radix, chunk, output)
+            return Ok(())
+        # An internal node still has more than 96 limbs and therefore
+        # a nonzero split, even at the largest supported conversion radix.
+        # Siblings share a power and reciprocal even when their widths differ.
         middle = len(output) - split
-        (q, r) = powers.divide(value, split, reuse)?
-        left = canonical(False, q)
-        right = canonical(False, r)
-        render_digits(&left, radix, chunk, &mut output[:middle], split // 2, True, &mut powers)?
-        render_digits(&right, radix, chunk, &mut output[middle:], split // 2, True, &mut powers)?
+        match powers.render_divisor(used, split, reuse)?:
+            case Some(divisor):
+                remainder_size = divisor.first + len(divisor.digits)
+                quotient_size = used - remainder_size + 1
+                room = quotient_size + 1
+                quotient = &mut scratch[:room]
+                rest = &mut scratch[room:]
+                divide_render_digits(&mut value[:used + 1], divisor, &mut quotient[:quotient_size])?
+                render_digits(quotient, quotient_size, radix, chunk, &mut output[:middle], split // 2, True, powers, rest)?
+                render_digits(value, remainder_size, radix, chunk, &mut output[middle:], split // 2, True, powers, rest)?
+            case Nothing:
+                render_word(0u64, radix, &mut output[:middle])
+                render_digits(value, used, radix, chunk, &mut output[middle:], split // 2, True, powers, scratch)?
+        Ok(())
+
+# Retain the low limbs omitted from the divisor. The higher limbs are
+# normalized in place with one spare word, then unshifted as the remainder.
+def divide_render_digits(words: &mut [u64], divisor: &WideDivisor, quotient: &mut [u64]) -> Result[(), AllocError]:
+    unchecked:
+        shift = divisor.shift
+        numerator = &mut words[divisor.first:]
+        top = len(numerator) - 1
+        mut carry = 0u64
+        if shift != 0u64:
+            for i in range(top):
+                word = numerator[i]
+                numerator[i] = (word << shift) | carry
+                carry = word >> (64u64 - shift)
+        numerator[top] = carry
+        divisor.divide_digits(numerator, quotient, RADIX_DIVISION_BLOCK_LIMBS)?
+        if shift != 0u64:
+            n = len(divisor.digits)
+            for i in range(n - 1):
+                numerator[i] = (numerator[i] >> shift) | (numerator[i + 1] << (64u64 - shift))
+            numerator[n - 1] >>= shift
         Ok(())
 
 # Normalize an owned magnitude. Zero has no sign and each value in the signed
@@ -1658,6 +1727,13 @@ class WideDivisor:
     inverse: u64
     reciprocal: Option[DivisionReciprocal]
 
+    def divide_digits(self: &WideDivisor, u: &mut [u64], q: &mut [u64], block_limbs: i64) -> Result[(), AllocError]:
+        match &self.reciprocal:
+            case Some(reciprocal):
+                divide_reciprocal_digits(u, &self.digits, q, self.inverse, reciprocal, block_limbs)
+            case Nothing:
+                divide_normalized(u, &self.digits, q, self.inverse, block_limbs)
+
     def prepare_division_reciprocal(self: &mut WideDivisor, dividend_limbs: i64) -> Result[(), AllocError]:
         unchecked:
             n = len(self.digits)
@@ -1725,11 +1801,7 @@ def divide_wide(a: &BigInt, b: &WideDivisor, block_limbs: i64 = DIVISION_BLOCK_L
         n = len(b.digits)
         mut u = normalize_division(a, first, shift, 1)?
         mut q = zeros(len(u) - n)?
-        match &b.reciprocal:
-            case Some(reciprocal):
-                divide_reciprocal_digits(&mut u, &b.digits, &mut q, b.inverse, reciprocal, block_limbs)?
-            case Nothing:
-                divide_normalized(&mut u, &b.digits, &mut q, b.inverse, block_limbs)?
+        b.divide_digits(&mut u, &mut q, block_limbs)?
         mut r = zeros(first + n)?
         for i in range(first):
             r[i] = a.word(i)
